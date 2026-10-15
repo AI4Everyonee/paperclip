@@ -8,10 +8,6 @@ import { queryKeys } from "../../lib/queryKeys";
 import { cn } from "../../lib/utils";
 import { PropertyRow } from "./primitives";
 
-/**
- * Relationships row linking a routine-created task back to its source routine.
- * Shares the routine detail query cache with the routine page.
- */
 export function RoutineOriginRow({ routineId }: { routineId: string }) {
   const { data: routine, error } = useQuery({
     queryKey: queryKeys.routines.detail(routineId),
