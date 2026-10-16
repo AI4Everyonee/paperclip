@@ -1171,7 +1171,23 @@ describe("IssueProperties", () => {
     act(() => root.unmount());
   });
 
-  it("marks the source routine as deleted when it no longer exists", async () => {
+  it("omits the Routine row while the source routine is still loading", async () => {
+    mockRoutinesApi.get.mockReturnValue(new Promise(() => {}));
+    const root = renderProperties(container, {
+      issue: createIssue({ originKind: "routine_execution", originId: "routine-1" }),
+      childIssues: [],
+      onUpdate: vi.fn(),
+      inline: true,
+    });
+    await flush();
+
+    expect(mockRoutinesApi.get).toHaveBeenCalledWith("routine-1");
+    expect(container.querySelector('[data-property-label="Routine"]')).toBeNull();
+
+    act(() => root.unmount());
+  });
+
+  it("omits the Routine row when the source routine no longer exists", async () => {
     mockRoutinesApi.get.mockRejectedValue(new ApiError("Not found", 404, null));
     const root = renderProperties(container, {
       issue: createIssue({ originKind: "routine_execution", originId: "routine-gone" }),
@@ -1181,12 +1197,10 @@ describe("IssueProperties", () => {
     });
 
     await waitForAssertion(() => {
-      const row = container
-        .querySelector('[data-property-label="Routine"]')
-        ?.closest('[data-property-row="true"]');
-      expect(row?.textContent).toContain("Deleted routine");
-      expect(row?.querySelector("a")).toBeNull();
+      expect(mockRoutinesApi.get).toHaveBeenCalledWith("routine-gone");
     });
+    await flush();
+    expect(container.querySelector('[data-property-label="Routine"]')).toBeNull();
 
     act(() => root.unmount());
   });
