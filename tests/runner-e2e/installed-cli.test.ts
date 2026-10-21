@@ -60,7 +60,7 @@ it("admits only the 20 agreed Copilot cells through normal installed resolution 
     expect(() => assertInstalledCliSelection(env, [{ ...cell, id: `${cell.id}-unreviewed` }])).toThrow("explicit supported");
   }
 });
-it("qualified providers including Copilot discard ambient qualification overrides", () => {
+it("qualified providers drop ambient admission without granting custom model overrides", () => {
   for (const cell of cells) expect(buildRunnerE2EProcessEnvironment({ PAPERCLIP_RUNNER_ACPX_QUALIFICATION: "ambient" }, [cell]).PAPERCLIP_RUNNER_ACPX_QUALIFICATION).toBeUndefined();
   for (const agent of ["copilot"]) {
     const cell = runnerMatrix.find(e => e.profile.qualificationCandidate === agent)!;
