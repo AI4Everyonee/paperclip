@@ -43,12 +43,13 @@ it("reconciles real durable receipts for all three transport paths without inven
   expect(usage).toMatchObject({ status: "complete", observedAdmittedPayloadBytes: f.expectedBytes,
     totalAdmittedPayloadBytes: f.expectedBytes, billedCostUsd: null, billingStatus: "unreconciled", missingExecutions: [] });
   expect(usage.receipts.map(row => row.kind)).toEqual(["native", "finalization", "experiment"]);
+  expect(usage.receipts[0]).toMatchObject({ admittedExpandedSourceBytes: 2, admittedRecords: 0 });
   expect(usage.receipts.every(row => "receiptSha256" in row && /^[a-f0-9]{64}$/.test(row.receiptSha256!))).toBe(true);
   expect(usage.ledgerHash).toMatch(/^[a-f0-9]{64}$/);
   expect(JSON.stringify(usage)).not.toContain("private-fixture");
 });
 
-it.each(["missing", "unclosed", "unresolved", "foreign-project", "bad-total", "duplicate-outcome"])(
+it.each(["missing", "unclosed", "unresolved", "foreign-project", "bad-total", "bad-expanded-total", "missing-record-count", "duplicate-outcome"])(
   "retains other measured traffic and an unknown total for a %s receipt", async reason => {
     const f = await fixture(), file = f.files[0]!;
     if (reason === "missing") await rm(file);
@@ -58,6 +59,8 @@ it.each(["missing", "unclosed", "unresolved", "foreign-project", "bad-total", "d
       if (reason === "unresolved") rows[2].outcome = "uncertain";
       if (reason === "foreign-project") rows[0].projectId = "22222222-2222-4222-8222-222222222222";
       if (reason === "bad-total") rows.at(-1).admittedBytes = 0;
+      if (reason === "bad-expanded-total") rows.at(-1).admittedExpandedBytes = 0;
+      if (reason === "missing-record-count") delete rows[1].recordCount;
       if (reason === "duplicate-outcome") rows.splice(3, 0, rows[2]);
       await writeFile(file, rows.map(row => JSON.stringify(row)).join("\n") + "\n");
     }
@@ -75,6 +78,21 @@ it("binds the expected receipt set to admitted attempts and retains unstarted se
   await expect(collectScheduledIngestion({ ...f.input, executionIds: [] })).rejects.toThrow("selection");
   await expect(collectScheduledIngestion({ ...f.input, executionIds: ["foreign.local"] })).rejects.toThrow("Foreign ingestion attempt");
   await expect(collectScheduledIngestion({ ...f.input, campaignId: "foreign" })).rejects.toThrow("campaign mismatch");
+});
+
+it("keeps version 1 transport receipts readable without inventing expanded data measurements", async () => {
+  const f = await fixture(), file = f.files[0]!;
+  const rows = (await readFile(file, "utf8")).trim().split("\n").map(line => JSON.parse(line));
+  rows[0].version = 1; delete rows[0].sizing;
+  delete rows[0].limits.maxExpandedBytes; delete rows[0].limits.maxRecords;
+  for (const row of rows) {
+    delete row.expandedBytes; delete row.recordCount;
+    delete row.admittedExpandedBytes; delete row.admittedRecords;
+  }
+  await writeFile(file, rows.map(row => JSON.stringify(row)).join("\n") + "\n");
+  const usage = await collectScheduledIngestion(f.input);
+  expect(usage).toMatchObject({ status: "complete", billedCostUsd: null });
+  expect(usage.receipts[0]).toMatchObject({ admittedPayloadBytes: 2, admittedExpandedSourceBytes: null, admittedRecords: null });
 });
 
 it.each(["outcome", "closed"])("retains the verified prefix and digest when the final %s line is truncated", async kind => {

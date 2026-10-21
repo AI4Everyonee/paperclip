@@ -7,7 +7,8 @@ import { gunzipSync } from "node:zlib";
 import { evalOtlpRejected, evalOtlpResponse, isEvalProjectId, validateEvalOtlpParent, validateEvalOtlpPayload, type EvalOtlpSignal } from "./eval-otlp-payload.js";
 
 export const EVAL_OTLP_LIMITS = { maxRequests: 2048, maxRequestBytes: 8 * 1024 * 1024,
-  maxTotalBytes: 64 * 1024 * 1024, maxConcurrent: 4 } as const;
+  maxTotalBytes: 64 * 1024 * 1024, maxConcurrent: 4,
+  maxExpandedBytes: 256 * 1024 * 1024, maxRecords: 16_384 } as const;
 
 export async function startEvalOtlpRelay(input: {
   projectId: string; apiKey: string; campaignId: string; attemptId: string; receiptPath: string; deadlineAt: number;
@@ -29,12 +30,13 @@ export async function startEvalOtlpRelay(input: {
       .catch(error => { poisoned = true; throw error; });
     return writes;
   };
-  try { await record({ type: "policy", version: 1, projectId: input.projectId, campaignId: input.campaignId,
+  try { await record({ type: "policy", version: 2, sizing: "otlp-v1.9-expanded-source-json", projectId: input.projectId, campaignId: input.campaignId,
     attemptId: input.attemptId, limits, deadlineAt: new Date(input.deadlineAt).toISOString(), openedAt: new Date().toISOString() }); }
   catch (error) { await file.close(); throw error; }
   const token = randomBytes(32).toString("hex");
   const pending = new Set<Promise<void>>(), controllers = new Set<AbortController>();
-  const usage = { admittedRequests: 0, admittedWireBytes: 0, admittedBytes: 0, attemptedForwardBytes: 0, acceptedRequests: 0, incompleteRequests: 0 };
+  const usage = { admittedRequests: 0, admittedWireBytes: 0, admittedBytes: 0, admittedExpandedBytes: 0,
+    admittedRecords: 0, attemptedForwardBytes: 0, acceptedRequests: 0, incompleteRequests: 0 };
   const deny = (response: ServerResponse, status: number, code: string) => {
     if (response.destroyed) return;
     response.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" });
@@ -51,7 +53,7 @@ export async function startEvalOtlpRelay(input: {
       const contentType = request.headers["content-type"]?.split(";")[0].trim();
       const encoding = request.headers["content-encoding"];
       if (!["application/json", "application/x-protobuf"].includes(contentType ?? "") || encoding && encoding !== "gzip" && encoding !== "identity") return deny(response, 415, "unqualified_encoding");
-      let body: Buffer, parent: string, wireBytes = 0;
+      let body: Buffer, parent: string, wireBytes = 0, expandedBytes = 0, recordCount = 0;
       try {
         parent = validateEvalOtlpParent(String(request.headers["x-bt-parent"] ?? `project_id:${input.projectId}`), input.projectId);
         const chunks: Buffer[] = [];
@@ -62,17 +64,22 @@ export async function startEvalOtlpRelay(input: {
         }
         body = Buffer.concat(chunks);
         if (encoding === "gzip") body = gunzipSync(body, { maxOutputLength: limits.maxRequestBytes });
-        body = validateEvalOtlpPayload(body, contentType!, signal, input.projectId);
+        const validated = validateEvalOtlpPayload(body, contentType!, signal, input.projectId);
+        ({ body, expandedBytes, recordCount } = validated);
         if (body.length > limits.maxRequestBytes) throw new Error("request_limit");
       } catch { return deny(response, 400, "invalid_or_oversized_payload"); }
       if (closed || poisoned || Date.now() >= input.deadlineAt) return deny(response, 503, "relay_unavailable");
-      if (usage.admittedRequests >= limits.maxRequests || usage.admittedBytes + body.length > limits.maxTotalBytes) {
+      if (usage.admittedRequests >= limits.maxRequests || usage.admittedBytes + body.length > limits.maxTotalBytes
+          || usage.admittedExpandedBytes + expandedBytes > limits.maxExpandedBytes
+          || usage.admittedRecords + recordCount > limits.maxRecords) {
         if (!quotaRecorded) { quotaRecorded = true; await record({ type: "quota_exhausted", at: new Date().toISOString(), ...usage }); }
         return deny(response, 429, "ingestion_allowance_exhausted");
       }
       const id = randomUUID();
       usage.admittedRequests++; usage.admittedWireBytes += wireBytes; usage.admittedBytes += body.length;
+      usage.admittedExpandedBytes += expandedBytes; usage.admittedRecords += recordCount;
       await record({ type: "admitted", id, signal, at: new Date().toISOString(), wireBytes, bodyBytes: body.length,
+        expandedBytes, recordCount,
         payloadSha256: createHash("sha256").update(body).digest("hex") });
       const abort = new AbortController(); controllers.add(abort);
       const disconnected = () => { if (!response.writableEnded) abort.abort(); };

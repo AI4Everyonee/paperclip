@@ -3,7 +3,7 @@ import { finalizeEvalAttemptTrace, type EvalBraintrustConfig, type EvalFinalizat
 import { startEvalOtlpRelay } from "./eval-otlp-relay.js";
 
 export const EVAL_FINALIZATION_LIMITS = { maxRequests: 1, maxRequestBytes: 64 * 1024,
-  maxTotalBytes: 64 * 1024, maxConcurrent: 1 } as const;
+  maxTotalBytes: 64 * 1024, maxConcurrent: 1, maxExpandedBytes: 1024 * 1024, maxRecords: 256 } as const;
 
 export async function finalizeEvalAttemptThroughRelay(config: EvalBraintrustConfig,
   input: Parameters<typeof finalizeEvalAttemptTrace>[1], receiptPath: string, transport?: typeof fetch): Promise<EvalFinalizationReceipt> {

@@ -19,15 +19,18 @@ async function readReceipt(scope: ReceiptScope) {
   }
   const policy = rows[0], closed = rows.at(-1);
   const maximum = scope.kind === "native" ? EVAL_OTLP_LIMITS : scope.kind === "finalization" ? EVAL_FINALIZATION_LIMITS : EVAL_EXPERIMENT_LIMITS;
-  if (policy?.type !== "policy" || policy.version !== 1 || policy.campaignId !== scope.campaignId || policy.projectId !== scope.projectId
+  const expanded = scope.kind !== "experiment" && policy?.version === 2;
+  if (policy?.type !== "policy" || !(policy.version === 1 || expanded && policy.sizing === "otlp-v1.9-expanded-source-json")
+      || policy.campaignId !== scope.campaignId || policy.projectId !== scope.projectId
       || (scope.kind === "experiment" ? policy?.kind !== "experiment" : policy?.attemptId !== scope.attemptId)) {
     throw new Error("Invalid ingestion receipt identity");
   }
-  if (!policy.limits || Object.entries(maximum).some(([key, max]) => !Number.isSafeInteger(policy.limits[key])
+  if (!policy.limits || Object.entries(maximum).filter(([key]) => expanded || !["maxExpandedBytes", "maxRecords"].includes(key))
+    .some(([key, max]) => !Number.isSafeInteger(policy.limits[key])
       || policy.limits[key] < 1 || policy.limits[key] > max)) throw new Error("Invalid ingestion receipt limits");
   const admissions = new Map<string, { bodyBytes: number; scores: number }>();
   const outcomes = new Map<string, string>();
-  let payloadBytes = 0, scores = 0;
+  let payloadBytes = 0, scores = 0, expandedBytes = 0, recordCount = 0;
   const count = (value: unknown): value is number => Number.isSafeInteger(value) && Number(value) >= 0;
   for (let index = 1; index < rows.length; index++) {
     const row = rows[index];
@@ -35,9 +38,11 @@ async function readReceipt(scope: ReceiptScope) {
       const scoreCount = scope.kind === "experiment" ? row.scores : 0;
       if (typeof row.id !== "string" || admissions.has(row.id) || !count(row.bodyBytes) || !count(scoreCount)
           || scope.kind !== "experiment" && row.bodyBytes > policy.limits.maxRequestBytes
+          || expanded && (!count(row.expandedBytes) || !count(row.recordCount))
           || !/^[0-9a-f]{64}$/.test(row.payloadSha256)) throw new Error("Invalid ingestion admission");
       admissions.set(row.id, { bodyBytes: row.bodyBytes, scores: scoreCount });
       payloadBytes += row.bodyBytes; scores += scoreCount;
+      if (expanded) { expandedBytes += row.expandedBytes; recordCount += row.recordCount; }
     } else if (row.type === "outcome") {
       const allowed = scope.kind === "experiment" ? ["response", "unconfirmed"] : ["accepted", "partial", "rejected", "uncertain", "not_dispatched"];
       if (!admissions.has(row.id) || outcomes.has(row.id) || !allowed.includes(row.outcome)
@@ -46,16 +51,19 @@ async function readReceipt(scope: ReceiptScope) {
       outcomes.set(row.id, row.outcome);
     } else if (row.type === "closed") {
       if (index !== rows.length - 1 || row.admittedRequests !== admissions.size || row.admittedBytes !== payloadBytes
+          || expanded && (row.admittedExpandedBytes !== expandedBytes || row.admittedRecords !== recordCount)
           || scope.kind === "experiment" && row.admittedScores !== scores || row.poisoned) throw new Error("Invalid ingestion closure");
     } else if (row.type !== "quota_exhausted" || scope.kind === "experiment") throw new Error("Unexpected ingestion record");
   }
   if (admissions.size > policy.limits.maxRequests || payloadBytes > policy.limits.maxTotalBytes
+      || expanded && (expandedBytes > policy.limits.maxExpandedBytes || recordCount > policy.limits.maxRecords)
       || scope.kind === "experiment" && scores > policy.limits.maxScores) throw new Error("Ingestion allowance exceeded");
   const unresolved = [...admissions.keys()].filter(id => !outcomes.has(id) || ["uncertain", "unconfirmed"].includes(outcomes.get(id)!)).length;
   return { kind: scope.kind, ...(scope.attemptId ? { attemptId: scope.attemptId } : {}),
     receiptSha256: createHash("sha256").update(bytes).digest("hex"),
     status: !malformed && closed?.type === "closed" && unresolved === 0 ? "complete" : "incomplete",
     admittedRequests: admissions.size, admittedPayloadBytes: payloadBytes, admittedScores: scope.kind === "experiment" ? scores : null,
+    admittedExpandedSourceBytes: expanded ? expandedBytes : null, admittedRecords: expanded ? recordCount : null,
     unresolvedRequests: unresolved };
 }
 
