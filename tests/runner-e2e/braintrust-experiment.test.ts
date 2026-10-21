@@ -67,6 +67,35 @@ it("changes experiment identity for changed evidence while keeping unknown accou
   expect(after.metadata.missing_attempts).toBe(1);
 });
 
+it("imports original grades when report evidence validation changes the selected outcome", () => {
+  const { campaign, originals } = fixture();
+  const adjusted = structuredClone(campaign);
+  adjusted.results[0]!.status = "failed";
+  adjusted.results[0]!.error = "Missing final-state.png";
+  const plan = buildBraintrustExperiment(projectId, adjusted, originals);
+  expect(plan.events.find(row => row.metadata.attempt_id === "second")!.scores.product_pass).toBe(1);
+  expect(plan).toEqual(buildBraintrustExperiment(projectId, campaign, originals));
+  expect(adjusted.results[0]!.status).toBe("failed");
+  const changed = structuredClone(originals);
+  changed[1]!.status = "failed";
+  expect(() => buildBraintrustExperiment(projectId, adjusted, changed)).toThrow();
+});
+
+it("accepts current catalog model names including Cursor qualification parameters", () => {
+  for (const model of new Set(runnerMatrix.map(cell => cell.profile.model))) {
+    const { campaign, originals } = fixture();
+    const changed = originals.map(original => ({ ...original, model }));
+    const selected = { ...campaign, results: campaign.results.map(result => ({ ...result, model })) };
+    const plan = buildBraintrustExperiment(projectId, selected, changed);
+    expect(plan.events.every(row => row.input.model === model)).toBe(true);
+  }
+});
+
+it.each(["", "model\nprivate", "model\u0000private", "model<private>", "a".repeat(257)])("rejects malformed model names %j", model => {
+  const { campaign, originals } = fixture();
+  expect(() => buildBraintrustExperiment(projectId, campaign, originals.map(result => ({ ...result, model })))).toThrow();
+});
+
 it("keeps precise ledger amounts and reservations separate from trace metrics and unobserved attempts", () => {
   const { campaign, originals } = fixture();
   campaign.operations = { version: 1, scope: "shared_gateway_ledger", ledgerCampaignId: campaign.campaignId,

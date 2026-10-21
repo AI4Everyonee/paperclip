@@ -9,13 +9,15 @@ import type { RunnerE2ECampaign, RunnerE2EResult } from "./types.js";
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const identifier = (value: unknown): value is string => typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/.test(value);
+const modelName = (value: unknown): value is string => typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:/@=,\[\]-]{0,255}$/.test(value);
 const count = (value: unknown): value is number => Number.isSafeInteger(value) && Number(value) >= 0;
 const invalid = (): never => { throw new Error("Invalid retained experiment evidence"); };
 
 function attemptProjection(result: RunnerE2EResult, projectId: string) {
   if (result.schema !== "paperclip.runner-e2e.result/v2"
-      || ![result.executionId, result.suiteId, result.profileId, result.caseId, result.provider, result.model,
+      || ![result.executionId, result.suiteId, result.profileId, result.caseId, result.provider,
         result.accountingIdentity?.campaignId, result.accountingIdentity?.attemptId].every(identifier)
+      || !modelName(result.model)
       || !/^[0-9a-f]{64}$/.test(result.suiteDefinitionHash ?? "") || !/^[0-9a-f]{40}$/.test(result.source?.sha ?? "")
       || !count(result.attempt) || result.attempt < 1 || !count(result.durationMs)
       || !["passed", "failed"].includes(result.status) || !["passed", "failed", "not_started"].includes(result.cleanup)
@@ -76,7 +78,10 @@ export function buildBraintrustExperiment(projectId: string, campaign: RunnerE2E
   for (const selected of campaign.results.filter(result => result.attempt > 0)) {
     const id = buildCampaignAccounting({ results: [selected] }).attempts[0]!.id;
     const original = candidates.get(id);
-    if (!original || digest(original.projection) !== digest(attemptProjection(selected, projectId))) invalid();
+    const selectedProjection = attemptProjection(selected, projectId);
+    if (!original || digest(original.projection.input) !== digest(selectedProjection.input)
+        || digest(original.projection.metrics) !== digest(selectedProjection.metrics)
+        || digest(original.projection.metadata) !== digest(selectedProjection.metadata)) invalid();
   }
   const events = [...candidates.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([id, { original, projection }]) => {
     const cost = operations?.attempts.find(row => row.executionId === original.executionId && row.attemptId === original.accountingIdentity!.attemptId);
