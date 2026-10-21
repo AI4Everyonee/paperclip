@@ -7,7 +7,7 @@ Keep this manifest, its journal, and request receipts private.
 
 ## Supported admission
 
-The initial path admits local `core-compatibility` cells for `runner-codex`,
+The initial path admits local `core-compatibility` and `feedback-persistence` cells for `runner-codex`,
 `runner-acpx-claude`, `legacy-codex`, and `legacy-claude`. Each cell must have one
 provider credential and an exact priced model. Other suites, remote environments,
 subscription profiles, hosted tools, multimodal inputs, premium service modes,
@@ -114,6 +114,63 @@ failover header, or unexpected successful endpoint invalidates the receipt and
 holds its reservation. Provider prompt caching stays enabled and is metered.
 The response stream is passed through and cumulative usage is counted once.
 Gateway and native tracing are separate opt-ins; see the README tracing section.
+
+## Recurring campaigns
+
+The existing `runner-full-stack-e2e.yml` owns both schedules: daily at 08:47 UTC
+and weekly on Sunday at 09:47 UTC. Scheduled runs require both
+`RUNNER_FULL_STACK_E2E_NIGHTLY_ENABLED=true` and
+`RUNNER_FULL_STACK_E2E_OPERATIONS_ENABLED=true`. Leave the operations gate unset
+until the workflow, billing coverage and infrastructure allowance are qualified.
+There is no separate scheduler. The protected `runner-e2e-paid` environment needs
+`BRAINTRUST_API_KEY`; repository variable `RUNNER_E2E_BRAINTRUST_PROJECT_ID` names
+the exact project UUID. The key is available only to the bounded execution and
+finalization step, after dependency installation and immutable builds.
+
+Daily selects native Claude's marker and feedback-persistence cases with a shared
+$20 model allowance. Weekly adds native Codex's two corresponding cases with a
+shared $100 model allowance. Each campaign runs sequentially in one job with one
+journal, one attempt per execution, zero automatic retries, a 30-minute request
+deadline and a finite request count. Codex's worst-case request reservation exceeds
+$20, so it is absent from daily selection. Its context ceiling is unchanged.
+The monthly model allowance is at most $1,120 (31 daily plus five weekly runs).
+This excludes infrastructure and observability charges; it is not a reconciled
+total operating budget. These costs must be allocated before enabling recurrence.
+
+The checked pricecard expires on November 19, 2026. Admission stops when the
+pricecard expires, the catalog model changes, the project is missing, or the
+preflight already exists. Review current official prices and context limits
+before updating `scheduled-prices.json`. `forecast.json` records the selected
+IDs, small-sample pilot estimates, uncertainty, reservations and price expiry.
+The pilot does not establish p50/p95 or reliability. Daily coverage is deliberately
+limited to the two locally qualified Claude cases; broader rotation and Daytona
+remain unqualified and are not silently included by `--all`.
+
+Dispatch `cadence: daily` or `weekly` from the default branch to qualify the same
+path manually. Bounded dispatch rejects custom target revisions and selectors.
+Workflow attempts after the first cannot start paid work with a fresh journal.
+Rerunning reporting can reuse the original attempt-one evidence. Recover the
+retained ledger for a deliberately resumed campaign; do not reset it or launch a
+new campaign merely to hide a failure. The existing `manual` mode remains an
+explicit, unbounded qualification path and does not inherit these allowances.
+
+After execution, deterministic review dismisses only exact synthetic feedback
+bodies corroborated by all feedback-persistence graders. Novel feedback remains
+`needs_investigation`; no extra model call is made. Missing accounting, unresolved
+receipts, feedback collection/submission failures, novel feedback, export failure
+and incomplete experiment import fail the job with bounded diagnostic codes.
+Successful unchanged runs produce artifacts without posting messages. GitHub's
+workflow failure notifications remain the operator's notification channel.
+Missing/non-starting schedules require an external workflow monitor; this change
+does not claim that a workflow can detect its own failure to start.
+
+Original grades are imported into Braintrust without rerunning agents. The
+access-controlled artifact includes the journal, forecast, feedback dispositions,
+experiment receipt and findings. The trusted report job rebuilds the dashboard
+and retains its evidence-bound experiment link. Export acceptance and native
+indexing are separate: `findings.json` still labels indexing unverified. Codex's
+native exports can be high volume and Braintrust can double-count native/log
+observations; use the deduplicated gateway ledger as the estimate authority.
 
 ## Inspection and limits
 

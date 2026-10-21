@@ -311,7 +311,7 @@ describe("public repository paid workflow security", () => {
     const everydayOraclePreparation = paidJob.indexOf(
       "- name: Prepare pinned Python artifact oracle image",
     );
-    const paidExecution = paidJob.indexOf("- name: Run paid cell");
+    const paidExecution = paidJob.indexOf("- name: Run bounded campaign and retain feedback review");
     expect(paidInstall).toBeGreaterThan(0);
     expect(daytonaPluginPreparation).toBeGreaterThan(paidInstall);
     expect(awsFfmpegInstall).toBeGreaterThan(daytonaPluginPreparation);
@@ -588,7 +588,7 @@ describe("public repository paid workflow security", () => {
     }
   });
 
-  it("runs paid scheduled campaigns only on Sundays", async () => {
+  it("uses bounded daily and weekly Product schedules while preserving Runner schedules", async () => {
     const workflows = await Promise.all(
       [
         "runner-full-stack-e2e.yml",
@@ -598,12 +598,20 @@ describe("public repository paid workflow security", () => {
         readFile(path.join(repositoryRoot, ".github/workflows", name), "utf8"),
       ),
     );
-    for (const workflow of workflows) {
-      const crons = [...workflow.matchAll(/cron:\s*"([^"]+)"/g)].map(
-        (match) => match[1]!,
-      );
-      expect(crons).toHaveLength(1);
-      expect(crons[0]).toMatch(/^\d{1,2} \d{1,2} \* \* 0$/);
+    for (const [index, workflow] of workflows.entries()) {
+      const crons = [...workflow.matchAll(/cron:\s*"([^"]+)"/g)].map(match => match[1]!);
+      if (index === 0) {
+        expect(crons).toEqual(["47 8 * * *", "47 9 * * 0"]);
+        expect(workflow).toContain("vars.RUNNER_FULL_STACK_E2E_OPERATIONS_ENABLED == 'true'");
+        expect(workflow).toContain('test "$TARGET_SHA" = "$GITHUB_SHA"');
+        expect(workflow).toContain('echo "max_parallel=1"');
+        expect(workflow).toContain("--max-automatic-retries 0");
+        const paid = workflow.split("- name: Run bounded campaign and retain feedback review")[1]!.split("- name: Run paid cell")[0]!;
+        expect([...paid.matchAll(/secrets\.([A-Z_]+)/g)].map(match => match[1])).toEqual(["BRAINTRUST_API_KEY"]);
+      } else {
+        expect(crons).toHaveLength(1);
+        expect(crons[0]).toMatch(/^\d{1,2} \d{1,2} \* \* 0$/);
+      }
       expect(workflow).toContain("workflow_dispatch:");
     }
   });

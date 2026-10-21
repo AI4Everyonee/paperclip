@@ -2,9 +2,15 @@ name: Runner Full-Stack E2E
 
 on:
   schedule:
-    - cron: "47 8 * * 0"
+    - cron: "47 8 * * *"
+    - cron: "47 9 * * 0"
   workflow_dispatch:
     inputs:
+      cadence:
+        description: "Bounded daily ($20) or weekly ($100) selection; manual keeps explicit selectors"
+        type: choice
+        options: [manual, daily, weekly]
+        default: manual
       target_branch:
         description: "Branch in paperclipai/paperclip to test; the trusted workflow still runs from master"
         type: string
@@ -55,7 +61,7 @@ concurrency:
 jobs:
   authorize:
     name: Authorize paid campaign
-    if: github.event_name != 'schedule' || vars.RUNNER_FULL_STACK_E2E_NIGHTLY_ENABLED == 'true'
+    if: github.event_name != 'schedule' || (vars.RUNNER_FULL_STACK_E2E_NIGHTLY_ENABLED == 'true' && vars.RUNNER_FULL_STACK_E2E_OPERATIONS_ENABLED == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -212,13 +218,14 @@ jobs:
   catalog:
     name: Validate catalog and select cells
     needs: [authorize, target_lock]
-    if: github.event_name != 'schedule' || vars.RUNNER_FULL_STACK_E2E_NIGHTLY_ENABLED == 'true'
+    if: github.event_name != 'schedule' || (vars.RUNNER_FULL_STACK_E2E_NIGHTLY_ENABLED == 'true' && vars.RUNNER_FULL_STACK_E2E_OPERATIONS_ENABLED == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: read
     outputs:
       matrix: ${{ steps.catalog.outputs.matrix }}
+      operations_cadence: ${{ steps.catalog.outputs.operations_cadence }}
       needs_daytona: ${{ steps.catalog.outputs.needs_daytona }}
       needs_runner_typescript: ${{ steps.catalog.outputs.needs_runner_typescript }}
       needs_native_binaries: ${{ steps.catalog.outputs.needs_native_binaries }}
@@ -281,6 +288,11 @@ jobs:
         id: catalog
         env:
           EVENT_NAME: ${{ github.event_name }}
+          EVAL_EVENT: ${{ github.event_name }}
+          EVAL_SCHEDULE: ${{ github.event.schedule }}
+          EVAL_CADENCE: ${{ inputs.cadence || 'manual' }}
+          EVAL_OPERATIONS_ENABLED: ${{ vars.RUNNER_FULL_STACK_E2E_OPERATIONS_ENABLED }}
+          TARGET_SHA: ${{ needs.authorize.outputs.target_sha }}
           SELECT_ALL: ${{ inputs.all }}
           SELECT_SUITE: ${{ inputs.suite }}
           SELECT_GROUP: ${{ inputs.group }}
@@ -293,6 +305,30 @@ jobs:
           REQUESTED_MAX_PARALLEL: ${{ inputs.max_parallel }}
         run: |
           set -euo pipefail
+          if [ "$EVAL_EVENT" = schedule ] || [ "$EVAL_CADENCE" != manual ]; then
+            test "$TARGET_SHA" = "$GITHUB_SHA"
+            test -z "${SELECT_SUITE:-}${SELECT_GROUP:-}${SELECT_PROFILE:-}${SELECT_ENVIRONMENT:-}${SELECT_CASE:-}${SELECT_ID:-}"
+            catalog_json="$(node cli/node_modules/tsx/dist/cli.mjs tests/runner-e2e/scheduled-operations.ts matrix)"
+            cadence="$EVAL_CADENCE"
+            if [ "$EVAL_EVENT" = schedule ]; then
+              case "$EVAL_SCHEDULE" in
+                '47 8 * * *') cadence=daily ;;
+                '47 9 * * 0') cadence=weekly ;;
+                *) exit 1 ;;
+              esac
+            fi
+            {
+              echo "operations_cadence=$cadence"
+              echo "matrix=$(jq -c '{include: .include}' <<< "$catalog_json")"
+              echo "execution_ids=$(jq -c '.executionIds' <<< "$catalog_json")"
+              echo "needs_daytona=false"
+              echo "needs_runner_typescript=true"
+              echo "needs_native_binaries=true"
+              echo "needs_remote_provider_pack=false"
+              echo "max_parallel=1"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           args=(--matrix-json)
           add_values() {
             local flag="$1"
@@ -509,7 +545,7 @@ jobs:
   build_runner_artifacts:
     name: Build reusable runner campaign artifacts
     needs: [authorize, target_lock, catalog]
-    if: github.event_name != 'schedule' || vars.RUNNER_FULL_STACK_E2E_NIGHTLY_ENABLED == 'true'
+    if: github.event_name != 'schedule' || (vars.RUNNER_FULL_STACK_E2E_NIGHTLY_ENABLED == 'true' && vars.RUNNER_FULL_STACK_E2E_OPERATIONS_ENABLED == 'true')
     # Compile native binaries on the same reviewed image used to execute them,
     # avoiding libc/architecture drift between GitHub-hosted and AWS lanes.
     runs-on: ${{ needs.authorize.outputs.test_runner }}
@@ -633,7 +669,7 @@ jobs:
     name: Build reusable remote provider pack
     needs:
       [authorize, target_lock, catalog, daytona_image, build_runner_artifacts]
-    if: github.event_name != 'schedule' || vars.RUNNER_FULL_STACK_E2E_NIGHTLY_ENABLED == 'true'
+    if: github.event_name != 'schedule' || (vars.RUNNER_FULL_STACK_E2E_NIGHTLY_ENABLED == 'true' && vars.RUNNER_FULL_STACK_E2E_OPERATIONS_ENABLED == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -1012,7 +1048,7 @@ jobs:
       # This definition executes only from the authorized default-branch workflow.
       # Provision host policy before credentials reach target-controlled tests.
       - name: Provision Codex sandbox on the disposable trusted runner
-        if: matrix.environmentId == 'local' && (matrix.profileId == 'runner-codex' || matrix.profileId == 'runner-codex-mini' || matrix.profileId == 'runner-acpx-codex' || matrix.profileId == 'runner-codex-subscription')
+        if: matrix.environmentId == 'local' && (needs.catalog.outputs.operations_cadence == 'weekly' || matrix.profileId == 'runner-codex' || matrix.profileId == 'runner-codex-mini' || matrix.profileId == 'runner-acpx-codex' || matrix.profileId == 'runner-codex-subscription')
         run: |
           node --input-type=module <<'NODE'
           import { execFileSync } from "node:child_process";
@@ -1052,7 +1088,36 @@ jobs:
           timeout 120s docker pull "$oracle_image"
           timeout 30s docker image inspect "$oracle_image" --format '{{.Id}}'
 
+      - name: Prepare bounded campaign before credentials
+        if: needs.catalog.outputs.operations_cadence != ''
+        env:
+          EVAL_EVENT: ${{ github.event_name }}
+          EVAL_SCHEDULE: ${{ github.event.schedule }}
+          EVAL_CADENCE: ${{ needs.catalog.outputs.operations_cadence }}
+          EVAL_OPERATIONS_ENABLED: ${{ vars.RUNNER_FULL_STACK_E2E_OPERATIONS_ENABLED }}
+          PAPERCLIP_E2E_BRAINTRUST_PROJECT_ID: ${{ vars.RUNNER_E2E_BRAINTRUST_PROJECT_ID }}
+        run: node cli/node_modules/tsx/dist/cli.mjs tests/runner-e2e/scheduled-operations.ts prepare
+
+      - name: Run bounded campaign and retain feedback review
+        if: needs.catalog.outputs.operations_cadence != ''
+        env:
+          BRAINTRUST_API_KEY: ${{ secrets.BRAINTRUST_API_KEY }}
+          PAPERCLIP_E2E_BRAINTRUST_PROJECT_ID: ${{ vars.RUNNER_E2E_BRAINTRUST_PROJECT_ID }}
+          PAPERCLIP_RUNNER_E2E_SOURCE_SHA: ${{ needs.authorize.outputs.target_sha }}
+          PAPERCLIP_RUNNER_E2E_SOURCE_REF: ${{ needs.authorize.outputs.target_ref }}
+          PAPERCLIP_PLAYWRIGHT_CHANNEL: ${{ needs.authorize.outputs.playwright_channel }}
+        run: |
+          set +e
+          args=(--max-parallel 1 --max-automatic-retries 0)
+          while IFS= read -r id; do args+=(--id "$id"); done < <(jq -r '.executionIds[]' "$PAPERCLIP_E2E_OPERATIONS_MANIFEST")
+          pnpm test:e2e:runner -- "${args[@]}"
+          run_status=$?
+          node cli/node_modules/tsx/dist/cli.mjs tests/runner-e2e/scheduled-finalization.ts
+          finalization_status=$?
+          test "$run_status" = 0 && test "$finalization_status" = 0
+
       - name: Run paid cell
+        if: needs.catalog.outputs.operations_cadence == ''
         env:
           OPENAI_API_KEY: ${{ matrix.credentialName == 'OPENAI_API_KEY' && secrets.OPENAI_API_KEY || '' }}
           ANTHROPIC_API_KEY: ${{ matrix.credentialName == 'ANTHROPIC_API_KEY' && secrets.ANTHROPIC_API_KEY || '' }}
@@ -1155,7 +1220,7 @@ jobs:
           merge-multiple: false
 
       - name: Select latest workflow attempt per cell
-        if: always()
+        if: always() && needs.catalog.outputs.operations_cadence == ''
         env:
           PAPERCLIP_RUNNER_E2E_ARTIFACT_ROOT: ${{ github.workspace }}/downloaded-runner-e2e
           PAPERCLIP_RUNNER_E2E_SELECTED_ROOT: ${{ github.workspace }}/selected-runner-e2e
@@ -1164,6 +1229,25 @@ jobs:
           PAPERCLIP_RUNNER_E2E_SOURCE_SHA: ${{ needs.authorize.outputs.target_sha }}
           PAPERCLIP_RUNNER_E2E_SOURCE_REF: ${{ needs.authorize.outputs.target_ref }}
         run: node cli/node_modules/tsx/dist/cli.mjs tests/runner-e2e/select-rerun-artifacts.ts
+
+      - name: Preserve bounded campaign evidence and journal
+        if: always() && needs.catalog.outputs.operations_cadence != ''
+        env:
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          artifact="downloaded-runner-e2e/runner-e2e-$RUN_ID-1-scheduled-campaign"
+          directory="$GITHUB_WORKSPACE/selected-runner-e2e/runner-e2e-$RUN_ID-1-scheduled-campaign/scheduled"
+          echo "PAPERCLIP_E2E_OPERATIONS_LEDGER=$directory/ledger.jsonl" >> "$GITHUB_ENV"
+          test -d "$artifact"
+          mkdir -p selected-runner-e2e
+          cp -R "$artifact" selected-runner-e2e/
+          if [ -f "$directory/feedback-review.json" ]; then
+            echo "PAPERCLIP_E2E_FEEDBACK_REVIEW=$directory/feedback-review.json" >> "$GITHUB_ENV"
+          fi
+          if [ -f "$directory/experiment-receipt.json" ]; then
+            echo "PAPERCLIP_E2E_BRAINTRUST_EXPERIMENT=$directory/experiment-receipt.json" >> "$GITHUB_ENV"
+          fi
 
       - name: Collect blob reports
         run: |
@@ -1189,7 +1273,7 @@ jobs:
           PAPERCLIP_RUNNER_E2E_REPORT_ROOT: ${{ github.workspace }}/selected-runner-e2e
           PAPERCLIP_RUNNER_E2E_REPORT_OUT: ${{ github.workspace }}/runner-e2e-merged-report/normalized
           PAPERCLIP_RUNNER_E2E_EXPECTED_IDS: ${{ needs.catalog.outputs.execution_ids }}
-          PAPERCLIP_E2E_CAMPAIGN_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}
+          PAPERCLIP_E2E_CAMPAIGN_ID: ${{ needs.catalog.outputs.operations_cadence != '' && format('gha-{0}-1-scheduled-campaign', github.run_id) || format('gha-{0}-{1}', github.run_id, github.run_attempt) }}
           PAPERCLIP_RUNNER_E2E_SOURCE_SHA: ${{ needs.authorize.outputs.target_sha }}
           PAPERCLIP_RUNNER_E2E_SOURCE_REF: ${{ needs.authorize.outputs.target_ref }}
           PAPERCLIP_RUNNER_E2E_HISTORY_PUBLIC_BASE_URL: ${{ vars.RUNNER_E2E_HISTORY_PUBLIC_BASE_URL }}
