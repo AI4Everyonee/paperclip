@@ -3,6 +3,7 @@ import { buildCampaignAccounting } from "./attempt-accounting.js";
 import { validateEvalOperationsReport } from "./operations-report.js";
 import { validateCampaignFeedbackReview } from "./feedback-dispositions.js";
 import { validateBraintrustExperimentReceipt } from "./braintrust-experiment.js";
+import { classifyLatency } from "./latency-timing.js";
 import { summarizeStartupReuse } from "../../packages/adapter-utils/src/startup-reuse.js";
 import { validateCampaignAccounting, validateRetainedRunnerResult } from "./result-validation.js";
 import {
@@ -34,6 +35,11 @@ export function canonicalExecutionId(id: string) {
 
 export function upgradeRunnerResult(result: RunnerE2EResult): RunnerE2EResult {
   validateRetainedRunnerResult(result);
+  if (result.latencyProbes) result = { ...result, latencyProbes: result.latencyProbes.map(probe => {
+    const corrected = classifyLatency(probe, probe.target);
+    return probe.verdict === corrected.verdict ? corrected
+      : { ...corrected, recordedVerdict: probe.recordedVerdict ?? probe.verdict };
+  }) };
   result = { ...result, startupReuse: result.startupReuse ?? (result.runIds ?? []).map(runId => ({
     runId, ...summarizeStartupReuse([]),
   })) };
