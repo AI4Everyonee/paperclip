@@ -1,5 +1,7 @@
 import { expect, it, vi } from "vitest";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { buildBraintrustExperiment, importBraintrustExperiment, renderBraintrustExperiment, type BraintrustExperimentReceipt } from "./braintrust-experiment.js";
@@ -8,7 +10,7 @@ import { buildRunnerCampaign } from "./history.js";
 import { runnerMatrix } from "./catalog.js";
 import { emptyFeedbackSummary } from "./feedback.js";
 import { openExperimentIngestion } from "./experiment-ingestion.js";
-import type { RunnerE2EResult } from "./types.js";
+import type { RunnerE2ECampaign, RunnerE2EResult } from "./types.js";
 
 const projectId = "11111111-1111-4111-8111-111111111111";
 const experimentId = "22222222-2222-4222-8222-222222222222";
@@ -195,6 +197,47 @@ it("preserves an evidence-bound experiment link through report regeneration and 
     expect(() => renderBraintrustExperiment({ ...campaign, braintrustExperiment: { ...receipt, privateNote: "private-canary" } as never })).toThrow();
     campaign.accounting!.missingAttempts++;
     expect(() => renderBraintrustExperiment(campaign)).toThrow();
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+it("rebuilds a report with a missing cell and its saved experiment without rerunning retained attempts", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "experiment-missing-report-"));
+  const repositoryRoot = path.resolve(import.meta.dirname, "../..");
+  const original = fixture().originals[1]!;
+  const missing = runnerMatrix.find(cell => cell.id !== original.executionId)!;
+  const input = path.join(root, "input"), attempt = path.join(input, "attempt");
+  const receiptPath = path.join(root, "experiment.json");
+  async function report(output: string, savedReceipt?: string) {
+    const result = await promisify(execFile)(process.execPath,
+      [path.join(repositoryRoot, "cli/node_modules/tsx/dist/cli.mjs"), path.join(repositoryRoot, "tests/runner-e2e/report.ts")], {
+        cwd: repositoryRoot,
+        env: { ...process.env, PAPERCLIP_RUNNER_E2E_REPORT_ROOT: input, PAPERCLIP_RUNNER_E2E_REPORT_OUT: output,
+          PAPERCLIP_E2E_CAMPAIGN_ID: "retained-pilot", PAPERCLIP_RUNNER_E2E_EXPECTED_IDS: JSON.stringify([original.executionId, missing.id]),
+          PAPERCLIP_E2E_BRAINTRUST_EXPERIMENT: savedReceipt },
+      }).catch(error => error as { code: number; stderr: string });
+    // Missing coverage still fails the campaign, but must not prevent rendering it.
+    expect(result).toMatchObject({ code: 1 });
+    expect(result.stderr).not.toContain("Invalid retained experiment evidence");
+    return JSON.parse(await readFile(path.join(output, "normalized-results.json"), "utf8")) as RunnerE2ECampaign;
+  }
+  try {
+    await mkdir(attempt, { recursive: true });
+    const raw = JSON.stringify(original);
+    await writeFile(path.join(attempt, "result.json"), raw);
+    await writeFile(path.join(attempt, "final-state.png"), "fixture-png");
+    await writeFile(path.join(attempt, "evidence-manifest.json"), JSON.stringify({ files: ["final-state.png"], leaks: [], missing: [] }));
+    const before = await report(path.join(root, "before"));
+    const receipt = await importBraintrustExperiment({ projectId, apiKey: "fixture-key" }, before, [original], async () => {}, receiver(before, [original]));
+    await writeFile(receiptPath, JSON.stringify(receipt));
+    const after = await report(path.join(root, "after"), receiptPath);
+    expect(after.results.find(result => result.attempt === 0)!.startedAt).not.toBe(before.results.find(result => result.attempt === 0)!.startedAt);
+    expect(after.braintrustExperiment).toEqual(receipt);
+    expect(after.accounting).toEqual(before.accounting);
+    expect(await readFile(path.join(root, "after", "index.html"), "utf8")).toContain(receipt.experimentUrl);
+    expect(await readFile(path.join(attempt, "result.json"), "utf8")).toBe(raw);
+    const changed = structuredClone(after);
+    changed.results.find(result => result.attempt > 0)!.startedAt = "2026-10-20T00:00:30.000Z";
+    expect(() => renderBraintrustExperiment(changed)).toThrow();
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
