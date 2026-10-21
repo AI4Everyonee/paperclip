@@ -10,6 +10,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { EVAL_OTLP_LIMITS, startEvalOtlpRelay } from "./eval-otlp-relay.js";
 import { EvalAttemptTrace, exportBraintrustAttemptParent } from "./braintrust.js";
 import { evalOtlpRejected, evalOtlpResponse } from "./eval-otlp-payload.js";
+import { evalOtlpSchema } from "./eval-otlp-schema.js";
 
 const projectId = "11111111-1111-4111-8111-111111111111", apiKey = "upstream-private-fixture";
 const protobuf = createRequire(new URL("../../server/package.json", import.meta.url))("protobufjs") as typeof import("../../server/node_modules/protobufjs/index.js");
@@ -208,4 +209,50 @@ it("retires the listening endpoint at its deadline without a supervisor close", 
   await f.relay.close();
   expect(upstream).not.toHaveBeenCalled();
   expect((await f.records()).at(-1)).toMatchObject({ type: "closed", admittedRequests: 0 });
+});
+
+it.each(["json", "protobuf"])("meters repeated resource/scope data and full record fields in %s before dispatch", async encoding => {
+  const upstream = vi.fn<typeof fetch>(async () => Response.json({}));
+  const f = await fixture({ transport: upstream, limits: { ...EVAL_OTLP_LIMITS, maxExpandedBytes: 40_000 } });
+  const payload = { resourceSpans: [{ resource: { attributes: [{ key: "shared", value: { stringValue: "r".repeat(3000) } }] },
+    scopeSpans: [{ scope: { name: "s".repeat(1000), version: "fixture" }, spans: Array.from({ length: 4 }, () => ({
+      name: "n".repeat(1000), traceId: "AQEBAQEBAQEBAQEBAQEBAQ==", spanId: "AgICAgICAgI=", flags: 1,
+      startTimeUnixNano: "1234567890123456789", endTimeUnixNano: "1234567890123456790",
+      events: [{ name: "e".repeat(1000), timeUnixNano: "1234567890123456789" }],
+      links: [{ traceId: "AwMDAwMDAwMDAwMDAwMDAw==", spanId: "BAQEBAQEBAQ=", flags: 1 }],
+    })) }] }] };
+  const type = evalOtlpSchema.lookupType("TracesData");
+  const body = encoding === "json" ? Buffer.from(JSON.stringify(payload)) : Buffer.from(type.encode(type.fromObject(payload)).finish());
+  const send = () => fetch(f.relay.baseUrl + "/v1/traces", { method: "POST", body: Buffer.from(body),
+    headers: { authorization: `Bearer ${f.relay.token}`, "content-type": encoding === "json" ? "application/json" : "application/x-protobuf" } });
+  expect(body.length).toBeLessThan(20_000);
+  expect((await send()).status).toBe(200);
+  expect((await send()).status).toBe(429);
+  expect(upstream).toHaveBeenCalledTimes(1);
+  expect(Buffer.from(upstream.mock.calls[0]![1]!.body as Uint8Array)).toEqual(body);
+  await f.relay.close();
+  const records = await f.records(), admitted = records.find(row => row.type === "admitted");
+  expect(admitted.recordCount).toBe(4);
+  expect(admitted.expandedBytes).toBeGreaterThan(35_000);
+  expect(records.at(-1)).toMatchObject({ admittedRecords: 4, admittedExpandedBytes: admitted.expandedBytes });
+});
+
+it("accepts thousands of small native records while bounding their total count", async () => {
+  const upstream = vi.fn<typeof fetch>(async () => Response.json({}));
+  const f = await fixture({ transport: upstream, limits: { ...EVAL_OTLP_LIMITS, maxRecords: 3000 } });
+  const body = JSON.stringify({ resource_logs: [{ scope_logs: [{ log_records: Array.from({ length: 2533 }, () => ({ body: { stringValue: "event" } })) }] }] });
+  expect((await f.send(body, {}, "/v1/logs")).status).toBe(200);
+  expect((await f.send(body, {}, "/v1/logs")).status).toBe(429);
+  expect(upstream).toHaveBeenCalledTimes(1);
+  expect((await f.records()).find(row => row.type === "admitted").recordCount).toBe(2533);
+});
+
+it("rejects unknown protobuf fields instead of excluding forwarded data from sizing", async () => {
+  const upstream = vi.fn<typeof fetch>(async () => Response.json({}));
+  const f = await fixture({ transport: upstream });
+  const body = message(1, message(2, message(2, message(100, Buffer.from("unknown-content")))));
+  const response = await fetch(f.relay.baseUrl + "/v1/traces", { method: "POST", body,
+    headers: { authorization: `Bearer ${f.relay.token}`, "content-type": "application/x-protobuf" } });
+  expect(response.status).toBe(400);
+  expect(upstream).not.toHaveBeenCalled();
 });
