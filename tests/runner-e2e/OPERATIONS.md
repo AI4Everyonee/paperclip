@@ -191,7 +191,13 @@ this limit. Each campaign runs sequentially in one job with one
 journal, one attempt per execution, zero automatic retries, a 30-minute request
 deadline and a finite request count. Codex's worst-case request reservation exceeds
 $20, so it is absent from daily selection. Its context ceiling is unchanged.
-The monthly allowance is at most $1,120 (31 daily plus five weekly runs).
+The $20/$100 limits cover additional costs caused by each run. Show the existing
+Braintrust Pro subscription separately at $249/month (operator policy confirmed
+October 21, 2026); do not allocate it into these run limits. New processing,
+scoring, retention or capacity charges still count toward the run allowance.
+The monthly run allowance is at most $1,120 (31 daily plus five weekly runs),
+or $1,369 including the separately reported existing subscription. These are
+maximum allowances, not forecasts of actual spending.
 This is an admission limit with retained reservations, not a reconciled invoice
 total or a provider-enforced billing limit.
 
@@ -206,6 +212,10 @@ amounts are supplied. The supporting audit must include rates, resource/time
 bounds, included allowances, allocation denominators, and the controls that
 keep actual resource use within those bounds. Zero requires evidence of an
 included or zero incremental charge; setting a zero allowance is not a receipt.
+Under the current policy, `shared_subscription` may reserve zero for the
+existing Braintrust subscription with a reference to that policy and current
+plan evidence. Any newly incurred subscription or capacity charge needs its own
+incremental allocation; the existing fee must remain visible separately.
 
 The catalog checks that this allowance matches the selected runner, covers at
 least the next four hours, and leaves room for a full conservative model-request
