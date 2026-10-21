@@ -6,9 +6,10 @@ export interface AgentRunnerAvailability {
   defaultRunner: AgentRunner;
 }
 
-export function paperclipRunnerProfileForHarness(harness: string): { provider: "codex" } | { provider: "acpx"; acpxAgent: "claude" } | undefined {
+export function paperclipRunnerProfileForHarness(harness: string): { provider: "codex" | "opencode" } | { provider: "acpx"; acpxAgent: "claude" } | undefined {
   if (harness === "codex_local") return { provider: "codex" };
   if (harness === "claude_local") return { provider: "acpx", acpxAgent: "claude" };
+  if (harness === "opencode_local") return { provider: "opencode" };
   return undefined;
 }
 
@@ -27,6 +28,7 @@ function supportsLinuxLibc(libc?: "glibc" | "musl" | "unknown", version?: string
 
 export function paperclipRunnerSupportsPlatform(harness: string, platform: string, architecture: string, libc?: "glibc" | "musl" | "unknown", glibcVersion?: string): boolean {
   return !!paperclipRunnerProfileForHarness(harness)
+    && !(harness === "opencode_local" && platform === "linux" && architecture === "arm64")
     && ((platform === "linux" && supportsLinuxLibc(libc, glibcVersion) && (architecture === "x64" || architecture === "arm64"))
       || (platform === "darwin" && (architecture === "arm64" || architecture === "x64")));
 }
