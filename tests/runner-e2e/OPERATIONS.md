@@ -5,6 +5,10 @@ unmetered legacy campaigns. Do not infer a spending limit from a campaign ID.
 Enable the bounded path with `PAPERCLIP_E2E_OPERATIONS_MANIFEST=/absolute/file.json`.
 Keep this manifest, its journal, and request receipts private.
 
+The [coverage and operating-cost guide](OPERATIONS-COVERAGE.md) records cadence
+ownership, suite-growth requirements, non-model allocation, the separate Runner
+Eval audit, and remaining activation gaps.
+
 ## Supported admission
 
 The initial path admits local `core-compatibility` and `feedback-persistence` cells for `runner-codex`,

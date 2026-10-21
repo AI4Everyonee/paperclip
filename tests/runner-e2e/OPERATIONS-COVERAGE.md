@@ -1,0 +1,126 @@
+# Eval coverage and operating costs
+
+Use this with [OPERATIONS.md](OPERATIONS.md). The bounded daily and weekly
+selections cover Product E2E only. They do not authorize or cap the separate
+Runner protocol workflow, manual matrix runs, or other live probes.
+
+## Initial cadence
+
+The runner E2E maintainers own these selections and their failure triage.
+Both profiles use the exact model and limits in the reviewed pricecard.
+
+| Journey | Failure detected | Feature-map association | Cadence |
+| --- | --- | --- | --- |
+| Native Claude message marker | A real task cannot complete and persist its expected answer through the metered route | `runs-adapters/runs` | Daily and weekly |
+| Native Claude complaint and suggestion | Completed tools fail to save attributed feedback or collection loses it | `activity/agent-commentary` | Daily and weekly |
+| Native Codex message marker | The corresponding Codex task/connection path fails | `runs-adapters/runs` | Weekly |
+| Native Codex complaint and suggestion | The corresponding Codex feedback/tool path fails | `activity/agent-commentary` | Weekly |
+
+These associations identify partial coverage. They do not qualify every run
+lifecycle, the Commentary browser page, continuation, or remote execution.
+The initial forecast uses one successful pilot sample per selected cell:
+approximately $0.62 and 100 summed attempt seconds daily, $1.00 and 160 seconds
+weekly. Earlier failed attempts remain in campaign spending. These values omit
+queue/build time and non-model charges; use the retained forecast's uncertainty,
+not its midpoint, when considering expansion.
+
+At the October 21, 2026 catalog audit, 47 suites declared 738 cells. `--all`
+included 179; the other 559 required explicit selection. The bounded weekly
+selection included four cells, and daily two. These are dated inventory counts,
+not live acceptance results or an enduring catalog-size contract. Inspect the
+current `pnpm test:e2e:runner -- --list` before choosing work. In particular,
+Everyday Workflows, provider connections, feedback persistence, interruption,
+and case handoffs must not be inferred from a passing `--all` campaign.
+
+Keep the broader rotating lane disabled until its exact cells have a metered
+route, complete retained attempts, a measured cost/time distribution, and a
+budget that includes failures. Prefer targeted continuation, approval, and
+cleanup cases that detect different failures over another model running the
+same marker. A release lane may broaden coverage only with its own reviewed
+manifest; the daily/weekly allowance does not authorize it.
+
+## Adding an eval or changing its cadence
+
+The change's fixture documentation and PR must declare:
+
+- A responsible maintainer/team and the concrete failure the case detects.
+- Feature-map capability IDs, or an explicit unmapped gap. State what the
+  journey does not exercise within a broader capability.
+- Exact suite, case, profiles, models, environment, and intended cadence.
+  State whether it is explicit-only and how it differs from existing coverage.
+- A deterministic alternative considered, and why paid behavior is necessary.
+- Attempt, request, output-token, concurrency, retry, and wall-time limits.
+  Include setup, judges, child/background work, and cleanup in the route audit.
+- Estimated cost/time before the first run, then all-attempt measurements with
+  sample count, retained failures, source/definition IDs, and uncertainty.
+  An unmeasured field is unknown, never zero.
+- Feedback collection/review, trace verification, missing-receipt handling,
+  and a failure/cleanup owner. Novel complaints are reviewed independently
+  of the product grade.
+
+Use the existing [Product E2E authoring skill](../../.agents/skills/add-product-e2e-eval/SKILL.md)
+or the separate [Runner authoring skill](../../.agents/skills/add-runner-eval/SKILL.md).
+Update the existing scheduled selection and forecast only after qualification;
+adding a catalog entry alone must not enable recurring spending.
+
+## Costs outside the model journal
+
+Keep a separate cost component for each resource, with its currency, service,
+resource/request identity, source window, allocation basis, and status. Join
+components to campaign/attempt IDs where evidence permits. Do not sum a model
+estimate with the invoice that later reconciles that same usage.
+
+| Component | Evidence and allocation | When evidence is missing |
+| --- | --- | --- |
+| Provider models and paid tools | Dedicated project/key usage and billing exports; match provider request IDs or the narrowest available billing window | Preserve estimates, unknown requests, held reservations and the reconciliation difference |
+| Daytona | Owned sandbox ID, actual resources, billable lifecycle and provider receipt; include failed creates, retries, stopped storage and delayed deletion | Retain the reservation or an explicitly partial estimate; a requested TTL does not prove deletion |
+| CI compute | Workflow/job IDs, runner type, actual billed runtime and invoice rates; include setup, builds and failed jobs | Mark CI cost unknown; a short agent turn does not imply a cheap CI job |
+| Storage and transfer | Artifact size, retention window and billed storage/egress | Report the unpriced component, including retained failure evidence |
+| Braintrust/gateway usage | Project usage export and its window; distinguish included allowance from incremental overage | Do not treat free-looking trace metrics as proof of zero provider charges |
+| Shared subscriptions | Invoice plus an explicit allocation rule, such as the campaign's share of processed bytes or measured resource time | Keep the shared charge unallocated rather than assign an invented exact per-test cost |
+
+Retain both the service total and the allocation denominator so allocated
+amounts can be reproduced. A zero incremental usage charge can coexist with a
+nonzero shared subscription. Never add the entire subscription to every test.
+The current model admission gate does not enforce these non-model components;
+recurrence remains gated until the operator has reviewed their allowances.
+
+## Separate Runner Eval audit
+
+The October 21 audit inspected Paperclip source on master `8b873e0112` plus the
+eval operations stack, and the available `paperclip-evals` checkout at
+`0bae4e0947dc7959cae25b73d27533c096f23a14`. This is a source audit, not a
+new live run or proof of the workflow's configured private-repository revision.
+
+Runner reports already retain immutable attempts, retry-inclusive estimated
+cost and provider list cost as separate views, compatible-cohort comparisons,
+and missing-usage coverage. Its mock control plane is a different authority
+from the Product E2E server/database; Product feedback persistence cannot be
+claimed from a Runner tool assertion.
+
+The private `run_live_campaign.py` requires an explicit authorization envelope.
+The hosted `runner-protocol-live-evals.yml` instead fans out individual
+`run_live_roster.py` cells, supplies their direct provider credentials, and uses
+configured per-attempt limits. It does not use the Product E2E shared gateway
+journal, Braintrust attempt parent, indexing verifier, or feedback finalizer.
+The private campaign wrapper's aggregate authorization must not be assumed to
+protect that different hosted path.
+
+Before adding Runner recurrence, its owners must establish an aggregate
+allowance across fanout and retries, meter setup/provider bypasses, and qualify
+native tracing through its actual packaged runner. Preserve direct-provider
+qualification as its own route. Implement definition/roster changes in the
+maintained private repository, pin that reviewed revision in the existing
+workflow, and retain Runner's existing Evalbook renderer and scores. These
+gaps remain open; Product E2E qualification does not close them.
+
+## Missing campaign detection
+
+Workflow failure notifications cover runs that start. A separate observer must
+check both the expected start and terminal report, with a grace window for
+GitHub scheduling delay, and retain the last successfully inspected run ID.
+It must distinguish disabled recurrence, no run, still running, failed run,
+missing report, and an unavailable Actions API. It must never launch or retry
+paid work. Notify once for a new actionable state or recovery; healthy unchanged
+runs stay quiet. Until that observer is configured and exercised, missed-run
+detection is an explicit activation gap.
