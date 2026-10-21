@@ -2,6 +2,8 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { evalBraintrustConfig } from "./braintrust.js";
+import { openExperimentIngestion } from "./experiment-ingestion.js";
+import { collectScheduledIngestion } from "./ingestion-usage.js";
 import { importBraintrustExperiment, type BraintrustExperimentReceipt } from "./braintrust-experiment.js";
 import { verifyBraintrustIndexing } from "./braintrust-indexing.js";
 import { feedbackReviewTemplate, validateCampaignFeedbackReview, type CampaignFeedbackReview } from "./feedback-dispositions.js";
@@ -73,13 +75,28 @@ export async function finalizeScheduledCampaign(env: NodeJS.ProcessEnv) {
   const findings = scheduledCampaignFindings(campaign);
   const config = evalBraintrustConfig(env);
   let experiment: BraintrustExperimentReceipt | undefined;
+  let ingestion: Awaited<ReturnType<typeof openExperimentIngestion>> | undefined;
   try {
     if (!config) throw new Error("Missing Braintrust export configuration");
+    if (config.projectId !== manifest.projectId || campaign.campaignId !== manifest.limits.campaignId) throw new Error("Scheduled ingestion identity mismatch");
+    ingestion = await openExperimentIngestion({ projectId: config.projectId, campaignId: manifest.limits.campaignId,
+      receiptPath: `${manifest.ledgerPath}.experiment-ingestion.jsonl`, deadlineAt: Date.now() + 60_000 });
     await importBraintrustExperiment(config, campaign, originals, async receipt => {
       await writeFile(path.join(directory, "experiment-receipt.json"), `${JSON.stringify(receipt, null, 2)}\n`, { mode: 0o600 });
       experiment = receipt;
-    });
+    }, ingestion.transport);
   } catch { findings.push("experiment_import_incomplete"); }
+  finally {
+    try { await ingestion?.close(); }
+    catch { findings.push("experiment_ingestion_accounting_incomplete"); }
+  }
+  try {
+    if (!config) throw new Error("Missing Braintrust ingestion configuration");
+    const usage = await collectScheduledIngestion({ ledgerPath: manifest.ledgerPath, campaignId: manifest.limits.campaignId,
+      projectId: config.projectId, executionIds: manifest.executionIds });
+    await writeFile(path.join(directory, "ingestion-usage.json"), `${JSON.stringify(usage, null, 2)}\n`, { mode: 0o600 });
+    if (usage.status !== "complete") findings.push("ingestion_accounting_incomplete");
+  } catch { findings.push("ingestion_accounting_unavailable"); }
   let indexing = "unavailable";
   try {
     if (!config) throw new Error("Missing Braintrust query configuration");

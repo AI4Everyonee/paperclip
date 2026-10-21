@@ -7,6 +7,7 @@ import { regenerateRunnerDashboard } from "./dashboard-regenerate.js";
 import { buildRunnerCampaign } from "./history.js";
 import { runnerMatrix } from "./catalog.js";
 import { emptyFeedbackSummary } from "./feedback.js";
+import { openExperimentIngestion } from "./experiment-ingestion.js";
 import type { RunnerE2EResult } from "./types.js";
 
 const projectId = "11111111-1111-4111-8111-111111111111";
@@ -41,6 +42,24 @@ it("imports all attempts with their own source and original grades, excluding pr
   expect(plan.events.find(row => row.metadata.attempt_id === "second")!.metadata.trace).toMatchObject({ root_span_id: "c".repeat(32) });
   expect(buildBraintrustExperiment(projectId, { ...campaign, generatedAt: "2026-10-21T00:00:00Z" }, [...originals].reverse())).toEqual(plan);
   expect(buildBraintrustExperiment(projectId, campaign, [...originals, originals[0]!])).toEqual(plan);
+});
+
+it("imports retained grades through the scheduled transport allowance without changing the evidence", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "bounded-experiment-import-"));
+  const { campaign, originals } = fixture(), before = structuredClone({ campaign, originals });
+  const plan = buildBraintrustExperiment(projectId, campaign, originals), receiptPath = path.join(root, "ingestion.jsonl");
+  const meter = await openExperimentIngestion({ projectId, campaignId: campaign.campaignId, receiptPath, deadlineAt: Date.now() + 60_000,
+    transport: async (url, init) => String(url).endsWith("/experiment")
+      ? Response.json({ ...JSON.parse(String(init!.body)), id: experimentId })
+      : String(url).endsWith("/insert") ? Response.json({ row_ids: plan.events.map(row => row.id) }) : Response.json({}) });
+  try {
+    expect(await importBraintrustExperiment({ projectId, apiKey: "private-fixture" }, campaign, originals, async () => {}, meter.transport))
+      .toMatchObject({ status: "accepted", acceptedRows: 2, expectedRows: 2 });
+    await meter.close();
+    const rows = (await readFile(receiptPath, "utf8")).trim().split("\n").map(line => JSON.parse(line));
+    expect(rows.at(-1)).toMatchObject({ admittedRequests: 3, admittedScores: 4, unresolvedRequests: 0 });
+    expect({ campaign, originals }).toEqual(before);
+  } finally { await meter.close(); await rm(root, { recursive: true, force: true }); }
 });
 
 it.each(["missing", "foreign", "modified-grade", "ambiguous-source", "missing-source", "foreign-trace", "missing-hash"])("rejects %s evidence before network requests", async (kind) => {

@@ -2,12 +2,13 @@ import { openEvalOperations, type EvalOperations } from "./operations.js";
 import { readRecoveredFeedback } from "./feedback-recovery.js";
 import { readInterruptedAttemptTrace } from "./trace-recovery.js";
 import { EVAL_OBSERVABILITY_SECRET_NAMES, evalBraintrustConfig, finalizeEvalAttemptTrace } from "./braintrust.js";
+import { finalizeEvalAttemptThroughRelay } from "./eval-finalization-relay.js";
 import { runnerE2EPlaywrightInvocation, runnerE2EPlaywrightShutdownSignal } from "./web-server-command.js";
 import { verifyInstalledDaytonaPlugin } from "./installed-daytona-plugin.js";
 import { assertInstalledCliSelection, assertInstalledStartupOnly, verifyInstalledCli } from "./installed-cli.js";
 import { createProcessTreeOwner, stopOwnedProcessTree } from "./process-tree-owner.js";
 import { createRunnerE2ETemporaryRoot } from "./server-config.js";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { prepareCodexCiSandbox, requiresCodexCiSandbox } from "./codex-ci-sandbox.js";
 import { spawn } from "node:child_process";
 import { createWriteStream } from "node:fs";
@@ -946,14 +947,18 @@ async function runAttempt(input: {
       const resultPath = publishedResultPaths.get(result.executionId);
       const candidate = executions.find(candidate => candidate.id === result.executionId);
       if (!traceConfig || !result.tracing || !resultPath || !candidate) continue;
-      result.tracing.finalization = await finalizeEvalAttemptTrace(traceConfig, {
+      const finalizationInput = {
         receipt: result.tracing,
         identity: { campaignId: accountingCampaignId, attemptId: accountingAttemptId, executionId: candidate.id,
           provider: candidate.profile.provider, model: candidate.profile.model, environment: candidate.environment.id },
         provenance: { suiteId: candidate.suite.id, suiteDefinitionHash: candidate.suiteDefinitionHash, profileId: candidate.profile.id,
           caseId: candidate.task.id, sourceRevision: resolveRunnerE2ESource().sha },
         result,
-      });
+      };
+      result.tracing.finalization = input.operations
+        ? await finalizeEvalAttemptThroughRelay(traceConfig, finalizationInput,
+          path.join(`${input.operations.manifest.ledgerPath}.otlp`, `${createHash("sha256").update(accountingAttemptId).digest("hex")}-finalization.jsonl`))
+        : await finalizeEvalAttemptTrace(traceConfig, finalizationInput);
       const safeResult = `${JSON.stringify(sanitizeJson(result, attemptSecrets), null, 2)}\n`;
       assertSecretFree(safeResult, attemptSecrets, resultPath);
       await writeFile(resultPath, safeResult, "utf8");

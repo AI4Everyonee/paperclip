@@ -143,9 +143,29 @@ upstream error text. Receipt files are exclusive and cannot be reset on restart.
 An admission without an outcome is unresolved. Accepted ingestion does not prove
 indexing, and attempted forwarding bytes are not billed Braintrust storage.
 These receipts do not replace the observability overhead reservation or invoice
-reconciliation. Controller finalization still uses its direct exporter after
-the worker relay closes and is outside these relay traffic totals. This path
-currently supports the admitted local cells; remote transport remains unqualified.
+reconciliation. After the worker relay closes, bounded controller finalization
+uses a separate one-request, 64 KiB relay with a 30-second deadline. Its exclusive
+receipt is `<ledgerPath>.otlp/<attempt-hash>-finalization.jsonl`. This preserves
+the original trace and grade while accounting for the final controller export.
+This path currently supports the admitted local cells; remote transport remains
+unqualified.
+
+Scheduled experiment creation, grade insertion and summary retrieval share a
+60-second window, three-request cap, 4 MiB total payload allowance and eight-score
+cap. They run serially without automatic retry. Admission is persisted before
+dispatch in `<ledgerPath>.experiment-ingestion.jsonl`; uncertain responses retain
+their allowance and unresolved status. Reusing that file fails instead of
+resetting the budget. These limits cover the selected daily/weekly campaigns;
+the standalone experiment-import command does not use this transport budget.
+
+Private `ingestion-usage.json` binds all three receipt paths to the campaign's
+admitted attempts and ledger hash. Missing, malformed, unclosed or unresolved
+receipts leave the total unknown while preserving readable partial measurements.
+These are admitted transport payload bytes, not Braintrust processed-data units
+or an invoice. Vendor charges remain unreconciled. The current two-attempt daily
+maximum is 132.125 MiB and the four-attempt weekly maximum is 260.25 MiB,
+including finalization and the campaign's experiment payload allowance. These
+bounds do not include other projects, standalone imports or retained storage.
 
 ## Recurring campaigns
 
