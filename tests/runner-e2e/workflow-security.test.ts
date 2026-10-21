@@ -801,6 +801,15 @@ describe("public repository paid workflow security", () => {
   it("keeps recurring reports private while preserving a content-free liveness receipt", async () => {
     const workflow = await readFile(path.join(repositoryRoot, ".github/workflows/runner-full-stack-e2e.yml"), "utf8");
     const paid = workflow.split("\n  test:")[1]!.split("\n  report:")[0]!;
+    const manual = paid.split("\n  test_recurring:")[0]!;
+    const recurring = paid.split("\n  test_recurring:")[1]!;
+    expect(manual).not.toContain("id-token: write");
+    expect(manual).toContain("if: needs.catalog.outputs.operations_cadence == ''");
+    expect(recurring).toContain("id-token: write");
+    expect(recurring).toContain("needs.authorize.outputs.target_sha == github.sha");
+    expect(recurring).toContain("github.ref == format('refs/heads/{0}', github.event.repository.default_branch)");
+    expect(recurring).toContain("steps: *paid_test_steps");
+    expect(manual).toContain("steps: &paid_test_steps");
     const report = workflow.split("\n  report:")[1]!.split("\n  publish_history:")[0]!;
     const step = (source: string, name: string) => source.split(`      - name: ${name}\n`)[1]!.split(/\n      - /u)[0]!;
     for (const [job, name] of [[paid, "Upload access-controlled packaged cell evidence"], [report, "Upload access-controlled merged report"]]) {

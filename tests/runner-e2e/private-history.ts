@@ -44,16 +44,23 @@ export async function verifyPrivateHistory(publisher: BoundedHistoryPublisher, b
   }
 }
 
-export async function transferPrivateArtifact(options: {
+type TransferOptions = {
   operation: "upload" | "download";
   kind: "evidence" | "report";
   runId: string;
   directory: string;
   bucket: string;
   publisher: BoundedHistoryPublisher;
-}) {
-  const key = privateArtifactKey(options.kind, options.runId);
+};
+
+export async function transferPrivateArtifact(options: TransferOptions) {
+  privateArtifactKey(options.kind, options.runId);
   await verifyPrivateHistory(options.publisher, options.bucket);
+  return transferVerifiedArtifact(options);
+}
+
+async function transferVerifiedArtifact(options: TransferOptions) {
+  const key = privateArtifactKey(options.kind, options.runId);
   const temporary = await mkdtemp(path.join(os.tmpdir(), "paperclip-private-history-"));
   const archive = path.join(temporary, "archive.zip");
   try {
@@ -76,12 +83,39 @@ export async function transferPrivateArtifact(options: {
   }
 }
 
+export async function retainPrivateTransfer(options: TransferOptions, receipt: string, receiptPublisher?: () => BoundedHistoryPublisher) {
+  const key = privateArtifactKey(options.kind, options.runId);
+  await verifyPrivateHistory(options.publisher, options.bucket);
+  let result: Awaited<ReturnType<typeof transferVerifiedArtifact>> | undefined;
+  let failure: unknown;
+  try {
+    result = await transferVerifiedArtifact(options);
+  } catch (error) {
+    failure = error;
+  }
+  if (receiptPublisher) {
+    await options.publisher.save();
+    const snapshot = JSON.stringify({ ...JSON.parse(await readFile(receipt, "utf8")),
+      transfer: result ? { status: "complete", ...result } : { status: "failed_or_unknown" },
+      receiptUpload: { status: "pending_at_snapshot", maxBytes: 1024 * 1024 } });
+    if (Buffer.byteLength(snapshot) > 1024 * 1024) throw new Error("Private transfer receipt exceeds allowance");
+    await writeFile(`${receipt}.transfer.json`, snapshot, { mode: 0o600, flag: "wx" });
+    try {
+      await receiptPublisher().upload(options.bucket, `${key}.${options.operation}-receipt.json`, `${receipt}.transfer.json`, "application/json", "private, no-store", true);
+    } catch (retentionError) {
+      throw new AggregateError(failure ? [failure, retentionError] : [retentionError], "Private transfer receipt retention failed; local receipts remain authoritative");
+    }
+  }
+  if (failure) throw failure;
+  return result!;
+}
+
 async function main() {
   const [operation, kind, runId, directory] = process.argv.slice(2);
   if (!["verify", "upload", "download"].includes(operation ?? "") || !kind || !runId || !directory) {
     throw new Error("Usage: private-history.ts verify|upload|download evidence|report RUN_ID DIRECTORY");
   }
-  const key = privateArtifactKey(kind, runId);
+  privateArtifactKey(kind, runId);
   if (process.env.GITHUB_ACTIONS === "true" && (process.env.GITHUB_RUN_ATTEMPT !== "1" || process.env.GITHUB_RUN_ID !== runId)) {
     throw new Error("Private bounded history accepts only the initial attempt of this workflow run");
   }
@@ -94,14 +128,9 @@ async function main() {
     console.log("Private retention and access checks passed");
     return;
   }
-  const result = await transferPrivateArtifact({ operation: operation as "upload" | "download", kind: kind as "evidence" | "report", runId, directory, bucket, publisher });
-  if (operation === "upload" || process.env.GITHUB_ACTIONS === "true") {
-    const snapshot = JSON.stringify({ ...JSON.parse(await readFile(receipt, "utf8")), transfer: result,
-      receiptUpload: { status: "pending_at_snapshot", maxBytes: 1024 * 1024 } });
-    if (Buffer.byteLength(snapshot) > 1024 * 1024) throw new Error("Private transfer receipt exceeds allowance");
-    await writeFile(`${receipt}.transfer.json`, snapshot, { mode: 0o600, flag: "wx" });
-    await publisher.upload(bucket, `${key}.${operation}-receipt.json`, `${receipt}.transfer.json`, "application/json", "private, no-store", true);
-  }
+  const receiptPublisher = operation === "upload" || process.env.GITHUB_ACTIONS === "true"
+    ? () => new BoundedHistoryPublisher(`${receipt}.retention.json`) : undefined;
+  const result = await retainPrivateTransfer({ operation: operation as "upload" | "download", kind: kind as "evidence" | "report", runId, directory, bucket, publisher }, receipt, receiptPublisher);
   console.log(JSON.stringify(process.env.GITHUB_ACTIONS === "true" ? { version: 1, privateTransferCompleted: true } : result));
 }
 

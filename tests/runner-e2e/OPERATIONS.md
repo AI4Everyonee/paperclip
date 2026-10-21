@@ -63,7 +63,9 @@ provider and set `RUNNER_E2E_PRIVATE_HISTORY_S3_BUCKET`,
 `runner-e2e-paid` and `runner-e2e-history` environments. Review both environments'
 deployment branch allowlists before deployment; every allowed branch shares this
 role's trust boundary. This workflow separately requires the default branch before
-paid access. The role has configuration reads
+paid access. Manual target-branch tests have no OIDC permission. A separate recurring
+job receives that permission only when the target SHA equals the default-branch
+workflow SHA. Both jobs reuse the same anchored setup and test steps. The role has configuration reads
 and GetObject/PutObject under `runner-e2e-private/bounded-v1/`; no deletion,
 policy changes or access to the public history bucket. AWS credentials are step
 outputs supplied only to private transfer commands, never exported to paid agents.
@@ -82,8 +84,12 @@ before committing a fresh destination. Transfers use one conditional PutObject o
 one ranged GetObject. Automatic AWS retries and workflow reruns are refused. The
 bucket also rejects PutObject requests without an If-None-Match condition. A local
 transfer receipt cannot be overwritten by rerunning the command in the same directory.
-Each command retains admission and outcome metadata; a private receipt retains the
-archive hash and object version. Its own upload remains pending in that snapshot,
+Each command retains admission and outcome metadata. After private storage passes
+inspection, completed and failed transfers each get one independent receipt-upload
+attempt without repeating the original transfer. Successful receipts include the
+archive hash and object version; lost responses remain failed or unknown. A failed
+privacy inspection prevents all uploads, and an unsuccessful receipt upload can
+leave only the local receipt. Its own upload remains pending in the snapshot,
 so the snapshot is not proof of complete billing. Operator downloads and STS
 credential exchanges also need separate cost attribution.
 

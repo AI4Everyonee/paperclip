@@ -840,6 +840,7 @@ jobs:
 
   test:
     name: ${{ matrix.executionId }}
+    if: needs.catalog.outputs.operations_cadence == ''
     needs:
       [
         authorize,
@@ -855,14 +856,13 @@ jobs:
     timeout-minutes: ${{ matrix.timeoutMinutes }}
     permissions:
       contents: read
-      id-token: write
     environment:
       name: runner-e2e-paid
     strategy:
       fail-fast: false
       max-parallel: ${{ fromJSON(needs.catalog.outputs.max_parallel) }}
       matrix: ${{ fromJSON(needs.catalog.outputs.matrix) }}
-    steps:
+    steps: &paid_test_steps
       - name: Reauthorize paid execution before provider access
         env:
           GH_TOKEN: ${{ github.token }}
@@ -1222,10 +1222,27 @@ jobs:
         if: always() && needs.catalog.outputs.operations_cadence != '' && steps.stage_evidence.outputs.complete != 'true'
         run: exit 1
 
+  test_recurring:
+    name: ${{ matrix.executionId }}
+    if: needs.catalog.outputs.operations_cadence != '' && needs.authorize.outputs.target_sha == github.sha && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    needs: [authorize, target_lock, catalog, daytona_image, build_runner_artifacts, build_remote_provider_pack]
+    runs-on: ${{ needs.authorize.outputs.test_runner }}
+    timeout-minutes: ${{ matrix.timeoutMinutes }}
+    permissions:
+      contents: read
+      id-token: write
+    environment:
+      name: runner-e2e-paid
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ fromJSON(needs.catalog.outputs.max_parallel) }}
+      matrix: ${{ fromJSON(needs.catalog.outputs.matrix) }}
+    steps: *paid_test_steps
+
   report:
     name: Merge and enforce campaign result
     if: always() && !cancelled() && needs.catalog.result == 'success'
-    needs: [authorize, catalog, daytona_image, test]
+    needs: [authorize, catalog, daytona_image, test, test_recurring]
     outputs:
       history_source_ready: ${{ steps.history_source_ready.outputs.ready }}
     runs-on: ubuntu-latest

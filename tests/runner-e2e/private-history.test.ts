@@ -5,7 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, expect, it, vi } from "vitest";
 import { BoundedHistoryPublisher } from "./history-budget.js";
-import { archivePrivateEvidence, PRIVATE_HISTORY_PREFIX, privateArtifactKey, transferPrivateArtifact, verifyPrivateHistory } from "./private-history.js";
+import { archivePrivateEvidence, PRIVATE_HISTORY_PREFIX, privateArtifactKey, retainPrivateTransfer, transferPrivateArtifact, verifyPrivateHistory } from "./private-history.js";
 
 const execute = promisify(execFile);
 const roots: string[] = [];
@@ -129,4 +129,34 @@ it("uses immutable private keys and restores the uploaded archive through the ac
 it("rejects unsafe run identities and other artifact kinds", () => {
   for (const id of ["../123", "0", "1/2", "123-2"]) expect(() => privateArtifactKey("report", id)).toThrow();
   expect(() => privateArtifactKey("public", "123")).toThrow();
+});
+
+it.each([false, true])("retains an unknown transfer without retrying it when receipt upload fails=%s", async receiptFails => {
+  const root = await temporary(), source = path.join(root, "source"), receipt = path.join(root, "transfer.json");
+  await mkdir(source); await writeFile(path.join(source, "ledger.jsonl"), "original evidence\n");
+  const config = configurationRunner(configurations());
+  const runner = vi.fn(async (args: string[]) => {
+    if (args[1] !== "put-object") return config(args);
+    await copyFile(args[args.indexOf("--body") + 1]!, path.join(root, "accepted.zip"));
+    throw new Error("Response lost after server accepted archive");
+  });
+  const retain = vi.fn(async (args: string[]) => {
+    expect(args[args.indexOf("--key") + 1]).toBe(`${privateArtifactKey("evidence", "12345")}.upload-receipt.json`);
+    const snapshot = JSON.parse(await readFile(args[args.indexOf("--body") + 1]!, "utf8"));
+    expect(snapshot.transfer.status).toBe("failed_or_unknown");
+    expect(snapshot.requests.at(-1)).toMatchObject({ operation: "put-object", status: "failed_or_unknown" });
+    expect(snapshot.billedUsd).toBeNull();
+    expect(snapshot.receiptUpload.status).toBe("pending_at_snapshot");
+    if (receiptFails) throw new Error("Receipt response also lost");
+    return { stdout: '{"VersionId":"receipt-version"}' };
+  });
+  await expect(retainPrivateTransfer({ operation: "upload", kind: "evidence", runId: "12345", directory: source,
+    bucket: "private-bucket", publisher: new BoundedHistoryPublisher(receipt, runner) }, receipt,
+    () => new BoundedHistoryPublisher(`${receipt}.retention.json`, retain)))
+    .rejects.toThrow(receiptFails ? "receipt retention failed" : "Response lost");
+  expect(runner.mock.calls.filter(([args]) => args[1] === "put-object")).toHaveLength(1);
+  expect(retain).toHaveBeenCalledTimes(1);
+  expect((await lstat(`${receipt}.transfer.json`)).mode & 0o777).toBe(0o600);
+  expect(JSON.parse(await readFile(`${receipt}.retention.json`, "utf8")).requests[0].status)
+    .toBe(receiptFails ? "failed_or_unknown" : "accepted");
 });
