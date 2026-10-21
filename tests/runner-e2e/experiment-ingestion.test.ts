@@ -52,6 +52,34 @@ it("keeps failed forwarding charged to the finite allowance and records an unres
   expect((await f.records()).at(-1)).toMatchObject({ admittedRequests: 3, responses: 0, unresolvedRequests: 3 });
 });
 
+it("retains an unresolved allowance when response headers arrive but the body disconnects", async () => {
+  const f = await fixture(async () => new Response(new ReadableStream({ pull(controller) {
+    controller.error(new Error("private-disconnect-error"));
+  } }), { status: 200 }));
+  await expect(f.send({ project_id: projectId })).rejects.toThrow("unconfirmed");
+  await f.close();
+  const rows = await f.records();
+  expect(rows[2]).toMatchObject({ type: "outcome", outcome: "unconfirmed" });
+  expect(rows.at(-1)).toMatchObject({ admittedRequests: 1, responses: 0, unresolvedRequests: 1 });
+  expect(JSON.stringify(rows)).not.toContain("private-disconnect-error");
+});
+
+it("keeps a pending response body unresolved until the whole response is read", async () => {
+  let finish!: () => void;
+  const f = await fixture(async () => new Response(new ReadableStream({ start(controller) {
+    controller.enqueue(new TextEncoder().encode('{"ok":'));
+    finish = () => { controller.enqueue(new TextEncoder().encode('true}')); controller.close(); };
+  } })));
+  const pending = f.send({ project_id: projectId });
+  await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
+  expect((await f.records()).at(-1)).toMatchObject({ type: "admitted" });
+  await expect(f.send({ project_id: projectId })).rejects.toThrow("unavailable");
+  finish();
+  expect(await (await pending).json()).toEqual({ ok: true });
+  await f.close();
+  expect((await f.records()).at(-1)).toMatchObject({ responses: 1, unresolvedRequests: 0 });
+});
+
 it("refuses excess bytes, scores, foreign project and unqualified endpoints before dispatch", async () => {
   const upstream = vi.fn<typeof fetch>(async () => Response.json({}));
   const f = await fixture(upstream);

@@ -54,9 +54,21 @@ export async function openExperimentIngestion(input: {
       if (closed || poisoned || Date.now() >= input.deadlineAt) throw new Error("Experiment ingestion unavailable");
       let response: Response;
       try {
-        response = await (input.transport ?? fetch)(target, { ...init, redirect: "error", signal: AbortSignal.any([
+        const upstream = await (input.transport ?? fetch)(target, { ...init, redirect: "error", signal: AbortSignal.any([
           AbortSignal.timeout(Math.max(1, Math.min(15_000, input.deadlineAt - Date.now()))), ...(init?.signal ? [init.signal] : []),
         ]) });
+        const reader = upstream.body?.getReader(), chunks: Uint8Array[] = [];
+        let responseBytes = 0;
+        try {
+          while (reader) {
+            const next = await reader.read();
+            if (next.done) break;
+            responseBytes += next.value.length;
+            if (responseBytes > 1_048_576) throw new Error("Oversized experiment response");
+            chunks.push(next.value);
+          }
+          response = new Response(upstream.body === null ? null : Buffer.concat(chunks), { status: upstream.status, headers: upstream.headers });
+        } finally { await reader?.cancel().catch(() => {}); }
       } catch {
         await record({ type: "outcome", id, at: new Date().toISOString(), outcome: "unconfirmed" });
         throw new Error("Experiment ingestion response unconfirmed");

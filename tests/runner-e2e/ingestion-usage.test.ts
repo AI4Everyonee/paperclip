@@ -76,3 +76,15 @@ it("binds the expected receipt set to admitted attempts and retains unstarted se
   await expect(collectScheduledIngestion({ ...f.input, executionIds: ["foreign.local"] })).rejects.toThrow("Foreign ingestion attempt");
   await expect(collectScheduledIngestion({ ...f.input, campaignId: "foreign" })).rejects.toThrow("campaign mismatch");
 });
+
+it.each(["outcome", "closed"])("retains the verified prefix and digest when the final %s line is truncated", async kind => {
+  const f = await fixture(), file = f.files[0]!;
+  const lines = (await readFile(file, "utf8")).trim().split("\n");
+  const prefix = lines.slice(0, kind === "outcome" ? 2 : 3);
+  const truncated = prefix.join("\n") + '\n{"type":"' + kind;
+  await writeFile(file, truncated);
+  const usage = await collectScheduledIngestion(f.input);
+  expect(usage).toMatchObject({ status: "incomplete", observedAdmittedPayloadBytes: f.expectedBytes, totalAdmittedPayloadBytes: null });
+  expect(usage.receipts[0]).toMatchObject({ status: "incomplete", admittedRequests: 1, admittedPayloadBytes: 2,
+    unresolvedRequests: kind === "outcome" ? 1 : 0, receiptSha256: createHash("sha256").update(truncated).digest("hex") });
+});

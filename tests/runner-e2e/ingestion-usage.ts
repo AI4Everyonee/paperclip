@@ -11,7 +11,12 @@ interface ReceiptScope { kind: Kind; file: string; campaignId: string; projectId
 async function readReceipt(scope: ReceiptScope) {
   const bytes = await readFile(scope.file);
   if (bytes.length > 4 * 1024 * 1024) throw new Error("Oversized ingestion receipt");
-  const rows = bytes.toString("utf8").trim().split("\n").map(line => JSON.parse(line));
+  const rows: Array<Record<string, any>> = [];
+  let malformed = false;
+  for (const line of bytes.toString("utf8").trim().split("\n")) {
+    try { rows.push(JSON.parse(line)); }
+    catch { malformed = true; break; }
+  }
   const policy = rows[0], closed = rows.at(-1);
   const maximum = scope.kind === "native" ? EVAL_OTLP_LIMITS : scope.kind === "finalization" ? EVAL_FINALIZATION_LIMITS : EVAL_EXPERIMENT_LIMITS;
   if (policy?.type !== "policy" || policy.version !== 1 || policy.campaignId !== scope.campaignId || policy.projectId !== scope.projectId
@@ -49,7 +54,7 @@ async function readReceipt(scope: ReceiptScope) {
   const unresolved = [...admissions.keys()].filter(id => !outcomes.has(id) || ["uncertain", "unconfirmed"].includes(outcomes.get(id)!)).length;
   return { kind: scope.kind, ...(scope.attemptId ? { attemptId: scope.attemptId } : {}),
     receiptSha256: createHash("sha256").update(bytes).digest("hex"),
-    status: closed?.type === "closed" && unresolved === 0 ? "complete" : "incomplete",
+    status: !malformed && closed?.type === "closed" && unresolved === 0 ? "complete" : "incomplete",
     admittedRequests: admissions.size, admittedPayloadBytes: payloadBytes, admittedScores: scope.kind === "experiment" ? scores : null,
     unresolvedRequests: unresolved };
 }
