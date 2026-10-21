@@ -159,6 +159,13 @@ There is no separate scheduler. The protected `runner-e2e-paid` environment need
 the exact project UUID. The key is available only to the bounded execution and
 finalization step, after dependency installation and immutable builds.
 
+Native Claude gateway cases also require the pinned Claude CLI for the managed
+account's setup hello probe. The agent still runs through the pinned ACP runtime.
+The workflow installs and checks the CLI before providing credentials for both
+native and legacy Claude selections, including the aggregate scheduled selection.
+For a local campaign, verify that same CLI prerequisite before starting a paid
+attempt. Installing the ACP package alone does not satisfy this setup path.
+
 Bounded daily/weekly campaigns require a public repository and use the existing
 standard `ubuntu-latest` runner for both compilation and execution. They do not
 follow the manual campaign's AWS runner switch. GitHub charges no standard
