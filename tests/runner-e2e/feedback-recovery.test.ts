@@ -4,6 +4,7 @@ import os from "node:os";
 import { afterEach, expect, it } from "vitest";
 import { recoverInterruptedFeedback, readRecoveredFeedback } from "./feedback-recovery.js";
 import { mustPreserveRecoveryState } from "./cleanup-verification.js";
+import { isHistoricalBundlePathAllowed } from "./history-publish.js";
 import type { RunnerApi } from "./api.js";
 
 const roots: string[] = [];
@@ -37,6 +38,8 @@ it("retains saved feedback after worker loss while active-run coverage stays par
   const saved = await readFile(path.join(root, "snapshots/agent-feedback-recovered.json"), "utf8");
   expect(saved).toContain("Synthetic lost-worker complaint.");
   expect(saved).not.toContain("private-canary-value");
+  expect(isHistoricalBundlePathAllowed("evidence/case/attempt-1/snapshots/agent-feedback-recovered.json")).toBe(false);
+  expect(isHistoricalBundlePathAllowed("evidence/case/attempt-1/snapshots/feedback-recovery.json")).toBe(false);
   await writeFile(path.join(root, "snapshots/agent-feedback.json"), saved);
   await recoverInterruptedFeedback({ identity, caseDirectory: root, deadlineAt: Date.now() + 5000, secrets: [],
     api: api(() => { throw new Error("controller stopped after the worker checkpoint"); }),

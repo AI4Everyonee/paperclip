@@ -386,7 +386,7 @@ async function main() {
     `Accounting: ${campaign.accounting!.attempts.length} retained attempts; ${campaign.accounting!.missingAttempts} missing attempts; ${campaign.accounting!.excludedArtifacts} out-of-scope artifacts excluded. Costs cover captured usage, not unobserved setup or external charges.`,
     ...(campaign.operations ? operationsReportText(campaign.operations) : []),
     "",
-    `Feedback across retained attempts: ${feedback.complaints} complaints; ${feedback.suggestions} suggestions; ${feedback.incomplete} attempts with incomplete collection. Tool submissions: ${feedback.failedSubmissions} failed, ${feedback.unknownSubmissions} unresolved. Full bodies are in access-controlled snapshots/agent-feedback.json.`,
+    `Feedback across retained attempts: ${feedback.complaints} complaints; ${feedback.suggestions} suggestions; ${feedback.incomplete} attempts with incomplete collection. Tool submissions: ${feedback.failedSubmissions} failed, ${feedback.unknownSubmissions} unresolved. Full bodies are in access-controlled snapshots/agent-feedback.json or snapshots/agent-feedback-recovered.json.`,
     campaignFeedbackReviewText(campaign),
     "",
     `Estimated Daytona list-price runtime cost: $${billing.estimatedRuntimeCostUsd.toFixed(6)}`,
