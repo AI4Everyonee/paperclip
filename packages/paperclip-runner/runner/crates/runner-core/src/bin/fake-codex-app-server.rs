@@ -651,10 +651,19 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let require_codex_home_auth = args
         .iter()
         .any(|value| value == "--require-codex-home-auth");
-    if args.iter().any(|value| value == "--require-otel-environment") {
+    if args
+        .iter()
+        .any(|value| value == "--require-otel-environment")
+    {
         for (name, expected) in [
-            ("OTEL_EXPORTER_OTLP_LOGS_HEADERS", "authorization=Bearer%20logs-fixture"),
-            ("OTEL_EXPORTER_OTLP_TRACES_HEADERS", "authorization=Bearer%20traces-fixture"),
+            (
+                "OTEL_EXPORTER_OTLP_LOGS_HEADERS",
+                "authorization=Bearer%20logs-fixture",
+            ),
+            (
+                "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+                "authorization=Bearer%20traces-fixture",
+            ),
         ] {
             assert_eq!(std::env::var(name).as_deref(), Ok(expected));
         }
