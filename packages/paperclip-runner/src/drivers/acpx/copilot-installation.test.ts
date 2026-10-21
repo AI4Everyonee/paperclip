@@ -89,14 +89,14 @@ describe("Copilot build-owned installation", () => {
   it("admits the current profile with environment launch preparation", () => {
     expect(QUALIFIED_ACPX_PROFILES.copilot.agentProfileVersion).toBe(58);
     expect(QUALIFIED_ACPX_PROFILES.copilot.qualificationStatus).toBeUndefined();
-    expect(QUALIFIED_ACPX_PROFILES.copilot.commandDigest).toBe("sha256:6f49e1a37bcde897703701b638dddf010a0b8e2c92c211a30d4a0bd41e48e77d");
+    expect(QUALIFIED_ACPX_PROFILES.copilot.commandDigest).toBe("sha256:7fbf0b3a48250c0c1852503d0dfd0af238c402d19c53573b573cc81f07c6016f");
   });
 
   it("preserves v57 while binding the shared Pi setup and launch repairs in v58", () => {
     const prior = JSON.parse(readFileSync(new URL("../../../test/fixtures/copilot-profile-v57-identity.json", import.meta.url), "utf8"));
     const current = JSON.parse(readFileSync(new URL("../../../test/fixtures/copilot-profile-v58-identity.json", import.meta.url), "utf8"));
     expect(Object.keys(current.declaration).filter(key => current.declaration[key] !== prior.declaration[key]).sort()).toEqual([
-      "agentProfileVersion", "guardedInstallationSourceSha256", "profileCompatibilitySourceSha256", "profileInstallationSourceSha256", "runtimeRequestBridgeSourceSha256",
+      "agentProfileVersion", "guardedInstallationSourceSha256", "profileCompatibilitySourceSha256", "profileInstallationSourceSha256", "runtimeHostSourceSha256", "runtimeRequestBridgeSourceSha256", "semanticBridgeSourceSha256", "semanticSidecarSourceSha256",
     ]);
     expect(isSupportedAcpxProfileVersion("copilot", 57)).toBe(true);
     expect(current.commandDigest).not.toBe(prior.commandDigest);
