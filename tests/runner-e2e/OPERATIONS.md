@@ -313,6 +313,14 @@ workflow failure notifications remain the operator's notification channel.
 Missing/non-starting schedules require an external workflow monitor; this change
 does not claim that a workflow can detect its own failure to start.
 
+The launcher starts the public Playwright JavaScript entry point directly with
+Node and sends SIGINT for cancellation and watchdog cleanup. The package-manager
+wrapper can exit before Playwright completes its shutdown, so it is excluded.
+Playwright handles that signal by stopping workers and closing its web server;
+SIGTERM can exit before web-server cleanup. The web-server supervisor still
+receives SIGTERM and owns its server's shutdown. Both paths retain the existing
+bounded grace period and forced cleanup for surviving owned processes.
+
 If a worker exits before writing its result, the server supervisor spends at
 most five seconds collecting feedback from that attempt's saved company before
 stopping the isolated server. Recovery snapshots remain private and are kept

@@ -1,7 +1,7 @@
 import { openEvalOperations, type EvalOperations } from "./operations.js";
 import { readRecoveredFeedback } from "./feedback-recovery.js";
 import { EVAL_OBSERVABILITY_SECRET_NAMES, evalBraintrustConfig, finalizeEvalAttemptTrace } from "./braintrust.js";
-import { runnerE2EPlaywrightInvocation } from "./web-server-command.js";
+import { runnerE2EPlaywrightInvocation, runnerE2EPlaywrightShutdownSignal } from "./web-server-command.js";
 import { verifyInstalledDaytonaPlugin } from "./installed-daytona-plugin.js";
 import { assertInstalledCliSelection, assertInstalledStartupOnly, verifyInstalledCli } from "./installed-cli.js";
 import { createProcessTreeOwner, stopOwnedProcessTree } from "./process-tree-owner.js";
@@ -310,7 +310,7 @@ async function runProcess(
   const cleanupFinished = new Promise<number>(resolve => { cleanupSettled = () => resolve(1); });
   const stopChildTree = (_diagnostic?: ProcessTreeDiagnostic) => {
     if (boundedCleanup) return;
-    boundedCleanup = stopOwnedProcessTree(child, processOwner)
+    boundedCleanup = stopOwnedProcessTree(child, processOwner, 45_000, 5_000, runnerE2EPlaywrightShutdownSignal)
       .then(() => null, error => error instanceof Error ? error.message : String(error))
       .finally(cleanupSettled);
     activeProcessCleanup.set(child.pid!, boundedCleanup);
@@ -618,7 +618,7 @@ async function runAttempt(input: {
           ) +
           5 * 60_000;
     const processResult = await runProcess(
-      runnerE2EPlaywrightInvocation(repositoryRoot, playwrightArgs, Boolean(installedCli)),
+      runnerE2EPlaywrightInvocation(repositoryRoot, playwrightArgs),
       childEnv,
       watchdog,
       path.join(privateDir, "playwright.log"),
