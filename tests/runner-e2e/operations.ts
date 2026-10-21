@@ -54,6 +54,10 @@ export function validateEvalOperationsManifest(value: EvalOperationsManifest, ex
 export async function openEvalOperations(file: string, executions: readonly MatrixExecution[], maxRetries: number, env: NodeJS.ProcessEnv) {
   const manifest = validateEvalOperationsManifest(JSON.parse(await readFile(file, "utf8")), executions, maxRetries);
   if (Date.now() >= Date.parse(manifest.limits.deadlineAt)) throw new Error("Eval campaign deadline reached");
+  if (manifest.limits.overhead && (Date.now() < Date.parse(manifest.limits.overhead.verifiedAt)
+      || Date.parse(manifest.limits.deadlineAt) >= Date.parse(manifest.limits.overhead.expiresAt))) {
+    throw new Error("Operating overhead allowance does not cover the campaign window");
+  }
   const required = manifest.route === "braintrust" ? ["BRAINTRUST_API_KEY"] : executions.map(execution => execution.profile.credential);
   if (required.some(name => !env[name]?.trim())) throw new Error("Missing eval gateway upstream credential");
   const receiptDirectory = `${manifest.ledgerPath}.requests`;

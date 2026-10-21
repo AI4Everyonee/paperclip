@@ -82,8 +82,13 @@ estimate with the invoice that later reconciles that same usage.
 Retain both the service total and the allocation denominator so allocated
 amounts can be reproduced. A zero incremental usage charge can coexist with a
 nonzero shared subscription. Never add the entire subscription to every test.
-The current model admission gate does not enforce these non-model components;
-recurrence remains gated until the operator has reviewed their allowances.
+Scheduled admission now reserves the declared CI, storage, observability and
+subscription allowances inside the same $20/$100 journal limit. Missing or stale
+allowances stop scheduling before the AWS test runner starts. Missing receipts
+keep their reservations held and accounting incomplete. This is a local admission
+control, not a provider billing cap. Actual resource bounds, cost collection and
+reviewed allowances still need qualification before recurrence is enabled; see
+[the allowance contract](OPERATIONS.md#recurring-campaigns).
 
 ## Separate Runner Eval audit
 

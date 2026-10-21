@@ -2,13 +2,18 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { prepareScheduledCampaign, scheduledCadence, scheduledManifest, scheduledMatrix, scheduledSelection } from "./scheduled-operations.js";
+import { prepareScheduledCampaign, scheduledCadence, scheduledManifest, scheduledMatrix, scheduledSelection, validateScheduledBudget } from "./scheduled-operations.js";
 import { parseRunnerSelectors, selectRunnerExecutions } from "./selectors.js";
 import { runnerMatrix } from "./catalog.js";
 import { evalRequestReservation } from "./eval-gateway.js";
+import { EVAL_OVERHEAD_COMPONENTS, type EvalOperatingOverhead } from "./operating-overhead.js";
+
+const overhead: EvalOperatingOverhead = { version: 1, reference: "fixture-only", runner: "github-hosted",
+  verifiedAt: "2026-10-20T00:00:00Z", expiresAt: "2026-11-19T00:00:00Z",
+  components: EVAL_OVERHEAD_COMPONENTS.map(component => ({ component, maxUsd: "1", reference: `fixture-${component}` })) };
 
 const input = { cadence: "daily" as const, campaignId: "scheduled-fixture", ledgerPath: "/tmp/scheduled-fixture/ledger.jsonl",
-  projectId: "11111111-1111-4111-8111-111111111111", now: Date.parse("2026-10-21T00:00:00Z"), runAttempt: "1" };
+  projectId: "11111111-1111-4111-8111-111111111111", now: Date.parse("2026-10-21T00:00:00Z"), runAttempt: "1", overhead };
 
 it.each(["daily", "weekly"] as const)("runs the exact %s selection through one shared budget and catalog job", cadence => {
   const manifest = scheduledManifest({ ...input, cadence });
@@ -48,12 +53,21 @@ it("fails closed before paid work if disabled, missing project identity, or pref
   const directory = await mkdtemp(path.join(tmpdir(), "eval-schedule-"));
   const env = { EVAL_EVENT: "schedule", EVAL_SCHEDULE: "47 8 * * *", EVAL_OPERATIONS_ENABLED: "true",
     GITHUB_RUN_ID: "123", GITHUB_RUN_ATTEMPT: "1", GITHUB_WORKSPACE: directory,
+    EVAL_OPERATING_OVERHEAD_JSON: JSON.stringify(overhead), EVAL_TEST_RUNNER: "ubuntu-latest",
     PAPERCLIP_E2E_BRAINTRUST_PROJECT_ID: input.projectId };
   try {
     await expect(prepareScheduledCampaign({ ...env, EVAL_OPERATIONS_ENABLED: "false" }, input.now)).rejects.toThrow("not enabled");
+    await expect(prepareScheduledCampaign({ ...env, EVAL_OPERATING_OVERHEAD_JSON: "" }, input.now)).rejects.toThrow("Missing reviewed");
     await expect(prepareScheduledCampaign({ ...env, PAPERCLIP_E2E_BRAINTRUST_PROJECT_ID: "" }, input.now)).rejects.toThrow("UUID");
     const prepared = await prepareScheduledCampaign(env, input.now);
     expect(prepared.manifest.limits.campaignId).toBe(prepared.campaignId);
     await expect(prepareScheduledCampaign(env, input.now)).rejects.toThrow("EEXIST");
   } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+it("rejects an overhead allowance that cannot leave room for a full selected request before emitting the matrix", () => {
+  const expensive = structuredClone(overhead);
+  expensive.components[0]!.maxUsd = "13";
+  expect(() => validateScheduledBudget({ ...input, overhead: expensive })).toThrow("insufficient allowance");
+  expect(validateScheduledBudget({ ...input, overhead })).toMatchObject({ executionIds: scheduledSelection("daily") });
 });

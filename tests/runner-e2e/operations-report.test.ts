@@ -36,7 +36,7 @@ it("reports shared setup/retry spending once, preserves unknown holds and omits 
     expect(rebuilt.operations).toEqual(report);
     expect(await readFile(path.join(root, "dashboard.html"), "utf8")).toContain("$0.200000000 additional held reservations");
     expect(renderEvalOperationsReport(report)).toContain("Do not add its model subtotal to heartbeat totals");
-    expect(renderEvalOperationsReport(report)).toContain("Infrastructure, storage, subscriptions");
+    expect(renderEvalOperationsReport(report)).toContain("Unrecorded infrastructure, storage, subscriptions");
     expect(() => validateEvalOperationsReport({ ...report, secret: "forbidden" } as never)).toThrow("Invalid retained");
     expect(() => validateEvalOperationsReport({ ...report, knownUsd: "0.060000000" })).toThrow("Invalid retained");
     expect(() => validateEvalOperationsReport({ ...report, attempts: [] })).toThrow("Invalid retained");

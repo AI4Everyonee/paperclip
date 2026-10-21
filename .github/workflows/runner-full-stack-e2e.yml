@@ -238,6 +238,7 @@ jobs:
     outputs:
       matrix: ${{ steps.catalog.outputs.matrix }}
       operations_cadence: ${{ steps.catalog.outputs.operations_cadence }}
+      operating_overhead: ${{ steps.catalog.outputs.operating_overhead }}
       needs_daytona: ${{ steps.catalog.outputs.needs_daytona }}
       needs_runner_typescript: ${{ steps.catalog.outputs.needs_runner_typescript }}
       needs_native_binaries: ${{ steps.catalog.outputs.needs_native_binaries }}
@@ -304,6 +305,8 @@ jobs:
           EVAL_SCHEDULE: ${{ github.event.schedule }}
           EVAL_CADENCE: ${{ inputs.cadence || 'manual' }}
           EVAL_OPERATIONS_ENABLED: ${{ vars.RUNNER_FULL_STACK_E2E_OPERATIONS_ENABLED }}
+          EVAL_OPERATING_OVERHEAD_JSON: ${{ vars.RUNNER_E2E_OPERATING_OVERHEAD_JSON }}
+          EVAL_TEST_RUNNER: ${{ needs.authorize.outputs.test_runner }}
           TARGET_SHA: ${{ needs.authorize.outputs.target_sha }}
           SELECT_ALL: ${{ inputs.all }}
           SELECT_SUITE: ${{ inputs.suite }}
@@ -331,6 +334,7 @@ jobs:
             fi
             {
               echo "operations_cadence=$cadence"
+              echo "operating_overhead=$(jq -c '.overhead' <<< "$catalog_json")"
               echo "matrix=$(jq -c '{include: .include}' <<< "$catalog_json")"
               echo "execution_ids=$(jq -c '.executionIds' <<< "$catalog_json")"
               echo "needs_daytona=false"
@@ -1107,6 +1111,8 @@ jobs:
           EVAL_SCHEDULE: ${{ github.event.schedule }}
           EVAL_CADENCE: ${{ needs.catalog.outputs.operations_cadence }}
           EVAL_OPERATIONS_ENABLED: ${{ vars.RUNNER_FULL_STACK_E2E_OPERATIONS_ENABLED }}
+          EVAL_OPERATING_OVERHEAD_JSON: ${{ needs.catalog.outputs.operating_overhead }}
+          EVAL_TEST_RUNNER: ${{ needs.authorize.outputs.test_runner }}
           PAPERCLIP_E2E_BRAINTRUST_PROJECT_ID: ${{ vars.RUNNER_E2E_BRAINTRUST_PROJECT_ID }}
         run: node cli/node_modules/tsx/dist/cli.mjs tests/runner-e2e/scheduled-operations.ts prepare
 

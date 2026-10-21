@@ -98,8 +98,8 @@ export function operationsReportText(report: EvalOperationsReport): string[] {
   return [
     `Shared request ledger ${report.ledgerCampaignId}: $${report.knownUsd} known subtotal; $${report.heldUsd} additional held reservations; $${report.committedUsd} committed against $${report.limitUsd}.`,
     `Charges: $${report.breakdown.reconciled} reconciled; $${report.breakdown.reported} reported; $${report.breakdown.estimated} estimated; $${report.breakdown.allocated} allocated.`,
-    `${report.requests} recorded requests; ${report.unresolvedRequests} unresolved; ${report.conflictingRequests} conflicting; ${report.inflight} in flight. Deadline ${report.deadlineAt}.`,
-    "This shared ledger includes earlier attempts and setup probes routed through the gateway. Do not add its model subtotal to heartbeat totals. Held reservations are not charges. Infrastructure, storage, subscriptions and requests outside the gateway need separate accounting; zero recorded requests does not prove zero cost.",
+    `${report.requests} recorded requests or overhead reservations; ${report.unresolvedRequests} unresolved; ${report.conflictingRequests} conflicting; ${report.inflight} in flight. Deadline ${report.deadlineAt}.`,
+    "This shared ledger includes earlier attempts and setup probes routed through the gateway, plus any declared campaign-overhead reservations. Do not add its model subtotal to heartbeat totals. Held reservations are not charges. Unrecorded infrastructure, storage, subscriptions and requests outside the gateway still need accounting; zero recorded requests does not prove zero cost.",
     `Journal checkpoint: ${report.records} records; SHA-256 ${report.journalHash}.`,
   ];
 }
@@ -108,7 +108,7 @@ export function renderEvalOperationsReport(report: EvalOperationsReport): string
   validateEvalOperationsReport(report);
   if (report.status === "unavailable") return `<section aria-label="Request ledger accounting"><h2>Request ledger accounting unavailable</h2>${operationsReportText(report).map(line => `<p>${html(line)}</p>`).join("")}</section>`;
   return `<section aria-label="Request ledger accounting"><h2>Request ledger accounting</h2>${operationsReportText(report).map(line => `<p>${html(line)}</p>`).join("")}
-    <table><thead><tr><th>Execution</th><th>Attempt</th><th>Requests</th><th>Known subtotal</th><th>Additional held</th><th>Unresolved</th></tr></thead><tbody>
+    <table><thead><tr><th>Execution</th><th>Attempt or component</th><th>Requests / reservations</th><th>Known subtotal</th><th>Additional held</th><th>Unresolved</th></tr></thead><tbody>
     ${report.attempts.map(attempt => `<tr><td>${html(attempt.executionId)}</td><td>${html(attempt.attemptId)}</td><td>${attempt.requests}</td><td>$${html(attempt.knownUsd)}</td><td>$${html(attempt.heldUsd)}</td><td>${attempt.unresolvedRequests}</td></tr>`).join("")}
     </tbody></table></section>`;
 }

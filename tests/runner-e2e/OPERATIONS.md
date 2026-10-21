@@ -132,14 +132,55 @@ the exact project UUID. The key is available only to the bounded execution and
 finalization step, after dependency installation and immutable builds.
 
 Daily selects native Claude's marker and feedback-persistence cases with a shared
-$20 model allowance. Weekly adds native Codex's two corresponding cases with a
-shared $100 model allowance. Each campaign runs sequentially in one job with one
+$20 allowance. Weekly adds native Codex's two corresponding cases with a
+shared $100 allowance. Model requests and declared operating overhead share
+this limit. Each campaign runs sequentially in one job with one
 journal, one attempt per execution, zero automatic retries, a 30-minute request
 deadline and a finite request count. Codex's worst-case request reservation exceeds
 $20, so it is absent from daily selection. Its context ceiling is unchanged.
-The monthly model allowance is at most $1,120 (31 daily plus five weekly runs).
-This excludes infrastructure and observability charges; it is not a reconciled
-total operating budget. These costs must be allocated before enabling recurrence.
+The monthly allowance is at most $1,120 (31 daily plus five weekly runs).
+This is an admission limit with retained reservations, not a reconciled invoice
+total or a provider-enforced billing limit.
+
+Before enabling recurrence, set `RUNNER_E2E_OPERATING_OVERHEAD_JSON` to a reviewed
+allowance with `version: 1`, an evidence `reference`, the actual `runner`
+(`github-hosted` or `aws-fleet`), and `verifiedAt`/`expiresAt` timestamps no more
+than 31 days apart. Its `components` array must contain exactly `ci_compute`,
+`artifact_storage`, `observability`, and `shared_subscription`. Each component
+needs a USD-string `maxUsd` and its own evidence `reference`. References are
+stable audit IDs or paths, not credentials or arbitrary prose. No default
+amounts are supplied. The supporting audit must include rates, resource/time
+bounds, included allowances, allocation denominators, and the controls that
+keep actual resource use within those bounds. Zero requires evidence of an
+included or zero incremental charge; setting a zero allowance is not a receipt.
+
+The catalog checks that this allowance matches the selected runner, covers at
+least the next four hours, and leaves room for a full conservative model-request
+reservation. This happens before the AWS test runner starts. The workflow passes
+the exact validated allowance to preparation; it does not read a potentially
+changed repository variable again. Preparation rechecks it and retains it in the
+manifest and forecast. Setup, builds, failed jobs, publication and retained
+artifacts must all fit the declared components, not just the agent's runtime.
+
+The journal initializes `overhead:<component>` reservations under
+`campaign-overhead` from its immutable limits before admitting model requests.
+These are allocation holds, not dispatched requests or completed resource
+lifecycles. They do not occupy model concurrency, but they count toward the
+finite charge-record limit. Resuming cannot change or drop them. Until matched
+cost observations arrive, the report shows them as unknown and keeps their
+allowance held; even a zero allowance does not claim a known zero charge.
+The existing finalizer reports incomplete accounting while these receipts are
+missing. Do not dismiss that finding to enable recurrence.
+
+Reconcile a component through its existing request ID with provenance-bound
+`infrastructure` or `invoice` observations. Partial observations keep the
+remaining reservation held; a final nonconflicting observation can replace it.
+Never mark a receipt final before its resource and billing window are complete.
+An external bill above the allowance remains visible and stops further model
+admission. The journal cannot stop AWS, storage or subscription billing itself;
+provider resource limits and a verified receipt collector remain activation
+requirements. No operating-cost allowance has been configured or qualified by
+the presence of this code.
 
 The checked pricecard expires on November 19, 2026. Admission stops when the
 pricecard expires, the catalog model changes, the project is missing, or the

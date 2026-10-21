@@ -3,6 +3,7 @@ import { constants } from "node:fs";
 import { mkdir, open, readFile, rm, type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { usdToUnits } from "../../packages/shared/src/money.js";
+import { validateOperatingOverhead, type EvalOperatingOverhead } from "./operating-overhead.js";
 
 export interface EvalSpendLimits {
   campaignId: string;
@@ -11,6 +12,7 @@ export interface EvalSpendLimits {
   maxRequests: number;
   maxConcurrent: number;
   maxAttemptsPerExecution?: number;
+  overhead?: EvalOperatingOverhead;
 }
 export interface EvalChargeIdentity {
   executionId: string;
@@ -74,11 +76,21 @@ export class EvalSpendState {
   private providerRequests = new Map<string, string>();
   constructor(limits: EvalSpendLimits) {
     this.limits = structuredClone(limits);
-    fields(limits, ["campaignId", "maxUsd", "deadlineAt", "maxRequests", "maxConcurrent", "maxAttemptsPerExecution"]);
+    fields(limits, ["campaignId", "maxUsd", "deadlineAt", "maxRequests", "maxConcurrent", "maxAttemptsPerExecution", "overhead"]);
     if (!validId(limits.campaignId) || amount(limits.maxUsd) <= 0n || !Number.isFinite(Date.parse(limits.deadlineAt))
         || !Number.isSafeInteger(limits.maxRequests) || limits.maxRequests < 1
         || !Number.isSafeInteger(limits.maxConcurrent) || limits.maxConcurrent < 1
         || limits.maxAttemptsPerExecution !== undefined && (!Number.isSafeInteger(limits.maxAttemptsPerExecution) || limits.maxAttemptsPerExecution < 1)) throw new Error("Invalid eval spend limits");
+    if (this.limits.overhead !== undefined) {
+      validateOperatingOverhead(this.limits.overhead, this.limits.maxUsd);
+      if (this.limits.maxAttemptsPerExecution === undefined || this.limits.maxRequests <= this.limits.overhead.components.length) {
+        throw new Error("Operating overhead requires bounded attempts and room for model requests");
+      }
+      for (const component of this.limits.overhead.components) this.requests.set(`overhead:${component.component}`, {
+        identity: { executionId: "campaign-overhead", attemptId: component.component, phase: "infrastructure" },
+        reserved: amount(component.maxUsd), observations: [], finished: true,
+      });
+    }
   }
   private authoritative(request: RequestState) {
     const priced = request.observations.filter(value => value.costUsd !== undefined);
@@ -116,6 +128,10 @@ export class EvalSpendState {
       admittedAttempts: [...this.attempts].map(([attemptId, executionId]) => ({ executionId, attemptId })) };
   }
   validate(event: Event, now = Date.now()) {
+    if ((event.type === "attempt" || event.type === "reserve") && this.limits.overhead
+        && (now < Date.parse(this.limits.overhead.verifiedAt) || now >= Date.parse(this.limits.overhead.expiresAt))) {
+      throw new EvalAdmissionError("Operating overhead allowance needs review before paid admission");
+    }
     if (event.type === "campaign") throw new Error("Duplicate campaign event");
     if (event.type === "attempt_policy") {
       fields(event, ["type", "previousJournalHash", "evidenceSha256", "maxAttemptsPerExecution", "priorAttempts"]);
