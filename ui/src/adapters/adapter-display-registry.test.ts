@@ -31,6 +31,7 @@ describe("adapter display registry", () => {
     expect(getAdapterLabel("hermes_gateway")).toBe("Hermes Gateway");
     expect(getAdapterLabel("opencode_local")).toBe("OpenCode");
     expect(getAdapterLabel("pi_local")).toBe("Pi");
+    expect(agentDisplayAdapterType({ adapterType: "paperclip_runner", adapterConfig: { provider: "acpx", acpxAgent: "pi" } })).toBe("pi_local");
 
     expect(getAdapterLabels()).toMatchObject({
       codex_local: "Codex",

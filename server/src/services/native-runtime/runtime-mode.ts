@@ -140,7 +140,7 @@ export function resolveNativeRuntimeMode(input: {
     throw ineligible("paperclip_runner_grok_disabled", "Enable Grok Bot, Paperclip Runner, and Assistant connections (MCP) before assigning new work.");
   } else if (runnerProfile.provider !== "codex" && runnerProfile.provider !== "opencode"
     && !(runnerProfile.provider === "acpx"
-      && (runnerProfile.acpxAgent === "claude" || runnerProfile.acpxAgent === "copilot"))
+      && (["claude", "copilot", "pi"].includes(runnerProfile.acpxAgent ?? "")))
     && !input.enabled) {
     throw ineligible(
       "paperclip_runner_rollout_disabled",
