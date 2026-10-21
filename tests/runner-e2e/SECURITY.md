@@ -441,3 +441,16 @@ not overwrite earlier evidence with a partially written JSON file.
 Review counts and fingerprints advance only after a checkpoint succeeds. A later
 write failure or expired deadline retains the last saved bodies and marks coverage
 incomplete.
+
+## Configured repository and conversion proof
+
+The repository proof flow seeds only the exact `workspace` child of its resolved
+fixture-owned temporary directory. It initializes that disposable Git checkout
+with a fresh random reference. It never modifies a contributor checkout. Provider
+credentials remain encrypted fixture secret references. Retention evidence keeps
+a digest of allowlisted configuration fields rather than raw environment values.
+The public API performs legacy conversion; no database mutation or private
+Runner hook performs it. Only synthetic source bytes and proof JSON enter the
+existing private attempt evidence and registered-artifact verification pipeline.
+A failed attempt remains retained. These development checks are not staging or
+Slack qualification, and they do not publish trusted archives or credentials.
