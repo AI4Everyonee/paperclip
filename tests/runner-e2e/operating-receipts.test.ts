@@ -17,7 +17,7 @@ const evidence = Buffer.from("fixture-only infrastructure receipt");
 const overhead: EvalOperatingOverhead = { version: 1, runner: "github-hosted", reference: "fixture-allowance",
   verifiedAt: "2026-10-01T00:00:00Z", expiresAt: "2026-11-01T00:00:00Z",
   components: EVAL_OVERHEAD_COMPONENTS.map(component => ({ component, maxUsd: "1", reference: `fixture-${component}` })) };
-const receipt = (fields: Partial<EvalOperatingReceipt> = {}): EvalOperatingReceipt => ({ version: 1, campaignId: "fixture",
+const receipt = (fields: Partial<EvalOperatingReceipt> = {}): EvalOperatingReceipt => ({ version: 2, costBasis: "component_cumulative", campaignId: "fixture",
   allowanceReference: overhead.reference, component: "artifact_storage", evidenceSha256: createHash("sha256").update(evidence).digest("hex"),
   windowStartedAt: "2026-10-01T00:00:00Z", windowEndedAt: "2026-10-02T00:00:00Z", coverage: "partial",
   source: "infrastructure", provider: "fixture", classification: "estimated", costUsd: "0.2", pricingVersion: "fixture-pricing", ...fields });
@@ -27,7 +27,8 @@ it("binds operating observations to the campaign, allowance, evidence and closed
   expect(operatingReceiptObservation(receipt(), "fixture", overhead, evidence, now)).toMatchObject({ requestId: "overhead:artifact_storage", final: false });
   for (const changed of [receipt({ campaignId: "other" }), receipt({ allowanceReference: "other" }), receipt({ evidenceSha256: "0".repeat(64) }),
     receipt({ windowEndedAt: "2026-10-04T00:00:00Z" }), receipt({ windowStartedAt: "2026-10-03T00:00:00Z" }),
-    receipt({ component: "model" as never }), { ...receipt(), apiKey: "disallowed" }]) {
+    receipt({ component: "model" as never }), receipt({ version: 1 as never }), receipt({ costBasis: undefined }),
+    receipt({ costBasis: "window_charge" as never }), { ...receipt(), apiKey: "disallowed" }]) {
     expect(() => operatingReceiptObservation(changed, "fixture", overhead, evidence, now)).toThrow();
   }
   expect(() => operatingReceiptObservation(receipt(), "fixture", overhead, Buffer.from("different"), now)).toThrow();
@@ -44,10 +45,10 @@ it("does not upgrade missing or partial evidence to an invoice or completed rece
     .toMatchObject({ classification: "allocated", route: "subscription", final: true });
 });
 
-async function fixture() {
+async function fixture(maxUsd = "20") {
   const directory = await mkdtemp(path.join(tmpdir(), "operating-receipts-"));
   const ledgerPath = path.join(directory, "ledger.jsonl");
-  const ledger = await openEvalCostLedger(ledgerPath, { campaignId: "fixture", maxUsd: "20", deadlineAt: "2099-01-01T00:00:00Z",
+  const ledger = await openEvalCostLedger(ledgerPath, { campaignId: "fixture", maxUsd, deadlineAt: "2099-01-01T00:00:00Z",
     maxRequests: 10, maxConcurrent: 1, maxAttemptsPerExecution: 1, overhead });
   await ledger.close();
   return { directory, ledgerPath };
@@ -84,6 +85,54 @@ it("fails before ledger mutation when retained evidence is corrupt or another wr
     finally { await writer.close(); }
     expect(await readFile(ledgerPath, "utf8")).toBe(before);
   } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+it("rejects separate partial windows and accounts for their cumulative total before admitting more work", async () => {
+  const { directory, ledgerPath } = await fixture("4.5");
+  try {
+    await importOperatingReceipt(ledgerPath, receipt({ source: "invoice", classification: "reconciled", costUsd: "0.8" }), evidence);
+    const before = await readFile(ledgerPath, "utf8");
+    await expect(importOperatingReceipt(ledgerPath, receipt({ source: "invoice", classification: "reconciled", costUsd: "0.8",
+      windowStartedAt: "2026-10-02T00:00:00Z", windowEndedAt: "2026-10-03T00:00:00Z" }), evidence)).rejects.toThrow("cumulative component window");
+    expect(await readFile(ledgerPath, "utf8")).toBe(before);
+    expect(await importOperatingReceipt(ledgerPath, receipt({ source: "invoice", classification: "reconciled", costUsd: "1.6",
+      windowEndedAt: "2026-10-03T00:00:00Z" }), evidence)).toMatchObject({ knownUsd: "1.600000000", heldUsd: "3.000000000", committedUsd: "4.600000000", overBudget: true });
+    const loaded = await readEvalCostLedger(ledgerPath), writer = await openEvalCostLedger(ledgerPath, loaded.state.limits);
+    try {
+      await writer.admitAttempt("fixture-cell", "next");
+      await expect(writer.reserve("next", { executionId: "fixture-cell", attemptId: "next", phase: "agent" }, "0.01"))
+        .rejects.toThrow("spending cap reached");
+    } finally { await writer.close(); }
+    await expect(importOperatingReceipt(ledgerPath, receipt({ costUsd: "0.9" }), evidence)).rejects.toThrow("cumulative component window");
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+it.each(["evidence", "receipt.json"])("retries must persist the existing %s file before recording its charge", async suffix => {
+  const { directory, ledgerPath } = await fixture();
+  const before = await readFile(ledgerPath, "utf8"), originalOpen = (await vi.importActual<typeof fs>("node:fs/promises")).open;
+  let syncs = 0;
+  const opened = vi.mocked(fs.open).mockImplementation(async (...args) => {
+    const handle = await originalOpen(...args);
+    if (String(args[0]).endsWith(`.${suffix}`)) {
+      const originalSync = handle.sync.bind(handle);
+      vi.spyOn(handle, "sync").mockImplementation(async () => {
+        if (++syncs <= 2) throw new Error("fixture file sync failure");
+        await originalSync();
+      });
+    }
+    return handle;
+  });
+  try {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await expect(importOperatingReceipt(ledgerPath, receipt(), evidence)).rejects.toThrow("file sync failure");
+      expect(await readFile(ledgerPath, "utf8")).toBe(before);
+    }
+    expect(await importOperatingReceipt(ledgerPath, receipt(), evidence)).toMatchObject({ knownUsd: "0.200000000", heldUsd: "3.800000000" });
+    expect(syncs).toBe(3);
+  } finally {
+    opened.mockImplementation(originalOpen);
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 it("retains the hold when the first evidence directory cannot be persisted in its parent", async () => {
