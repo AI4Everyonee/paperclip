@@ -850,7 +850,7 @@ describe("P6-31 Section 18.13 executable status-authority corpus", () => {
       ) {
         const experimentalAdapterConfig = {
           provider: "acpx",
-          acpxAgent: "pi",
+          acpxAgent: "grok",
           model: "anthropic/claude-sonnet-4-6",
         };
         const runtimeConfig = {
