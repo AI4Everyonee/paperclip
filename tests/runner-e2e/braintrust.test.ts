@@ -42,12 +42,12 @@ it.each(["codex", "claude"] as const)("preserves the attempt parent through the 
   });
   if (kind === "codex") {
     const exporter = launch.otelConfig!.trace_exporter as { "otlp-http": { headers: Record<string, string> } };
-    expect(decodeURIComponent(exporter["otlp-http"].headers["x-bt-parent"])).toBe(parent);
-  } else {
-    for (const name of ["OTEL_EXPORTER_OTLP_TRACES_HEADERS", "OTEL_EXPORTER_OTLP_LOGS_HEADERS"]) {
-      const encoded = launch.environment[name].split(",").find(header => header.startsWith("x-bt-parent="))!;
-      expect(decodeURIComponent(encoded.slice("x-bt-parent=".length))).toBe(parent);
-    }
+    expect(exporter["otlp-http"].headers).toEqual({});
+    expect(JSON.stringify(launch.otelConfig)).not.toContain(config.apiKey);
+  }
+  for (const name of ["OTEL_EXPORTER_OTLP_TRACES_HEADERS", "OTEL_EXPORTER_OTLP_LOGS_HEADERS"]) {
+    const encoded = launch.environment[name].split(",").find(header => header.startsWith("x-bt-parent="))!;
+    expect(decodeURIComponent(encoded.slice("x-bt-parent=".length))).toBe(parent);
   }
   expect(JSON.stringify(trace.snapshot())).not.toContain(config.apiKey);
 });
