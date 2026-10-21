@@ -457,3 +457,16 @@ forwarded to a fixed provider or Braintrust HTTPS origin; request headers do not
 select arbitrary destinations. Gateway response caching and fallback are refused.
 Request journal and usage receipts contain no prompt/response bodies or keys.
 The manifest, journal, and receipts are not public report projections.
+
+## Configured repository and conversion proof
+
+The repository proof flow seeds only the exact `workspace` child of its resolved
+fixture-owned temporary directory. It initializes that disposable Git checkout
+with a fresh random reference. It never modifies a contributor checkout. Provider
+credentials remain encrypted fixture secret references. Retention evidence keeps
+a digest of allowlisted configuration fields rather than raw environment values.
+The public API performs legacy conversion; no database mutation or private
+Runner hook performs it. Only synthetic source bytes and proof JSON enter the
+existing private attempt evidence and registered-artifact verification pipeline.
+A failed attempt remains retained. These development checks are not staging or
+Slack qualification, and they do not publish trusted archives or credentials.
