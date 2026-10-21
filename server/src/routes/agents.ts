@@ -1865,7 +1865,7 @@ export function agentRoutes(
         throw unprocessable("Enable Grok Bot, Assistant connections (MCP), and Paperclip Runner before connecting this agent.", { code: "paperclip_runner_grok_disabled" });
       } else if (!([undefined, "codex", "opencode"].includes(asRecord(config)?.provider as string | undefined)) &&
         !(asRecord(config)?.provider === "acpx" && asRecord(config)?.acpxAgent === "copilot") &&
-        agentHarnessType("paperclip_runner", asRecord(config) ?? {}) !== "claude_local" &&
+        !["claude_local", "pi_local"].includes(agentHarnessType("paperclip_runner", asRecord(config) ?? {})) &&
         experimental.enableNativeRunner !== true) {
         throw unprocessable(
           "Paperclip Runner is experimental and disabled on this instance.",
@@ -1936,12 +1936,15 @@ export function agentRoutes(
     }
     if (["openai_dot", "muse"].includes(String(input.nextAdapterConfig.provider))) return input.nextAdapterConfig;
     const defaults = paperclipRunnerTransitionConfig(input.previousAdapterType, input.previousAdapterConfig.model, input.nextAdapterConfig.provider);
-    if (!["claude_local", "codex_local", "opencode_local"].includes(input.previousAdapterType)
+    if (!["claude_local", "codex_local", "opencode_local", "pi_local"].includes(input.previousAdapterType)
       && !isPaperclipRunnerProvider(input.nextAdapterConfig.provider)) {
       throw unprocessable("Select a Paperclip Runner provider before converting this agent.");
     }
     const next = { ...defaults, ...input.nextAdapterConfig };
-    if (!asNonEmptyString(next.model)) next.model = defaults.model;
+    if (next.provider === "acpx" && next.acpxAgent === "pi") {
+      next.model = input.nextAdapterConfig.model
+        ?? (input.previousAdapterType === "pi_local" ? input.previousAdapterConfig.model : "");
+    } else if (!asNonEmptyString(next.model)) next.model = defaults.model;
     return normalizeLegacyRunnerProvider(next);
   }
 
@@ -2175,11 +2178,12 @@ export function agentRoutes(
         adapterType: input.adapterType ?? null,
       },
     );
-    const incompleteOpenCodeSetup = input.setupOnly && input.adapterType === "paperclip_runner"
-      && normalizedAdapterConfig.provider === "opencode"
+    const incompleteModelSetup = input.setupOnly && input.adapterType === "paperclip_runner"
+      && (normalizedAdapterConfig.provider === "opencode"
+        || (normalizedAdapterConfig.provider === "acpx" && normalizedAdapterConfig.acpxAgent === "pi"))
       && (normalizedAdapterConfig.model === undefined || normalizedAdapterConfig.model === "");
     // Inactive drafts can precede model selection. Test/hire always validate the complete profile.
-    if (!incompleteOpenCodeSetup) await assertAdapterConfigConstraints(
+    if (!incompleteModelSetup) await assertAdapterConfigConstraints(
       input.companyId,
       input.adapterType,
       input.constraintAdapterConfig
@@ -5378,12 +5382,16 @@ export function agentRoutes(
     // it gets the selectable check; keeping the agent's current adapter (even
     // one since disabled) stays allowed, so a disabled harness does not make an
     // existing agent uneditable.
-    if (runner !== undefined) {
+    const requestedRunnerConfig = asRecord(patchData.adapterConfig) ?? {};
+    const convertingPi = existing.adapterType === "pi_local" && patchData.adapterType === "paperclip_runner"
+      && (requestedRunnerConfig.provider === undefined
+        || (requestedRunnerConfig.provider === "acpx" && [undefined, "pi"].includes(requestedRunnerConfig.acpxAgent as string | undefined)));
+    if (runner !== undefined || convertingPi) {
       await assertCanConfigureAgentSetup(req, existing);
       const config = hasOwn(patchData, "adapterConfig") ? { ...(replaceAdapterConfig ? {} : existing.adapterConfig), ...asRecord(patchData.adapterConfig) } : existing.adapterConfig;
       Object.assign(patchData, await resolveNewAgentRunnerForCompany(db, existing.companyId, {
-        adapterType: typeof patchData.adapterType === "string" ? patchData.adapterType : existing.adapterType,
-        adapterConfig: config, runner, setupOnly: existing.lifecycleHolds?.includes("setup"),
+        adapterType: convertingPi ? "pi_local" : typeof patchData.adapterType === "string" ? patchData.adapterType : existing.adapterType,
+        adapterConfig: config, runner: runner ?? "paperclip", setupOnly: existing.lifecycleHolds?.includes("setup"),
         defaultEnvironmentId: hasOwn(patchData, "defaultEnvironmentId") ? patchData.defaultEnvironmentId as string | null : existing.defaultEnvironmentId,
       }));
     }

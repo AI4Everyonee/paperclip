@@ -73,7 +73,14 @@ unrelated edit. Check that saved native permission/lifecycle choices survive
 resuming setup. Custom commands, arguments, variants, and inherited permissions
 must give Legacy remediation when native is selected. A live task with the
 selected account is separate proof from these setup and persistence controls.
-Pi retains its existing default and is outside this rollout.
+Repeat with Pi on macOS or GNU/Linux x64 after explicit operator setup of the
+pinned runtime (`paperclipai runtime setup pi`). Linux ARM64 retains Legacy.
+Resume an inactive model-free draft, connect an account, choose a `provider/model`,
+and finish setup with the generic native flag off. Verify Pi branding and native
+ACPX Pi execution by completing a simple assigned task. Preserve saved native
+thinking/permission/lifecycle settings on resume and unrelated edits. Native
+thinking supports `off`, `low`, `high`, `max`; legacy aliases must give remediation,
+and returning to Legacy must reject settings it cannot honor.
 On a fresh forced-Kubernetes instance without an environment row, inspect discovery
 and create with automatic selection. Both must retain Legacy without provisioning;
 an explicit Paperclip request must give target-qualification guidance. Begin the
