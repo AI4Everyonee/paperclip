@@ -7,7 +7,8 @@ import { EVAL_OVERHEAD_COMPONENTS, type EvalOperatingOverhead } from "./operatin
 import { collectGitHubOperatingUsage } from "./github-operating-usage.js";
 
 export interface EvalOperatingReceipt {
-  version: 1;
+  version: 2;
+  costBasis: "component_cumulative";
   campaignId: string;
   allowanceReference: string;
   component: typeof EVAL_OVERHEAD_COMPONENTS[number];
@@ -27,10 +28,11 @@ const canonical = (receipt: EvalOperatingReceipt) => Object.fromEntries(Object.e
 export function operatingReceiptObservation(receipt: EvalOperatingReceipt, campaignId: string, overhead: EvalOperatingOverhead,
   evidence: Buffer, now = Date.now()): EvalCostObservation {
   if (!receipt || typeof receipt !== "object" || Array.isArray(receipt) || Object.keys(receipt).some(key => ![
-    "version", "campaignId", "allowanceReference", "component", "evidenceSha256", "windowStartedAt", "windowEndedAt",
+    "version", "costBasis", "campaignId", "allowanceReference", "component", "evidenceSha256", "windowStartedAt", "windowEndedAt",
     "coverage", "source", "provider", "classification", "costUsd", "pricingVersion",
   ].includes(key))) throw new Error("Invalid operating receipt fields");
-  if (receipt.version !== 1 || receipt.campaignId !== campaignId || receipt.allowanceReference !== overhead.reference
+  if (receipt.version !== 2 || receipt.costBasis !== "component_cumulative"
+      || receipt.campaignId !== campaignId || receipt.allowanceReference !== overhead.reference
       || !EVAL_OVERHEAD_COMPONENTS.includes(receipt.component) || !validEvalLedgerId(receipt.provider)
       || !["infrastructure", "invoice"].includes(receipt.source) || !["complete", "partial"].includes(receipt.coverage)
       || receipt.evidenceSha256 !== hash(evidence) || !/^[a-f0-9]{64}$/.test(receipt.evidenceSha256)
@@ -57,7 +59,11 @@ async function retain(file: string, bytes: Buffer) {
   try { handle = await open(file, "wx", 0o600); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-    if (!(await readFile(file)).equals(bytes)) throw new Error("Retained operating evidence conflicts");
+    const existing = await open(file, "r+");
+    try {
+      if (!(await existing.readFile()).equals(bytes)) throw new Error("Retained operating evidence conflicts");
+      await existing.sync();
+    } finally { await existing.close(); }
     return;
   }
   try { await handle.writeFile(bytes); await handle.sync(); } finally { await handle.close(); }
@@ -71,6 +77,25 @@ export async function importOperatingReceipt(ledgerPath: string, receipt: EvalOp
   const ledger = await openEvalCostLedger(ledgerPath, loaded.state.limits);
   try {
     const directory = `${ledgerPath}.overhead`;
+    const current = (await readEvalCostLedger(ledgerPath)).state;
+    if (!current.observations.has(observation.observationId)) {
+      for (const previous of current.observations.values()) {
+        if (previous.requestId !== observation.requestId) continue;
+        if (!/^operating-receipt:[a-f0-9]{64}$/.test(previous.observationId)) {
+          throw new Error("Operating receipt lacks cumulative window evidence");
+        }
+        const prior = JSON.parse(await readFile(path.join(directory, `${previous.observationId.split(":")[1]}.receipt.json`), "utf8")) as EvalOperatingReceipt;
+        if (previous.observationId !== `operating-receipt:${hash(JSON.stringify(canonical(prior)))}`
+            || prior.version !== 2 || prior.costBasis !== "component_cumulative") {
+          throw new Error("Retained operating receipt lacks verified cumulative window evidence");
+        }
+        if (Date.parse(receipt.windowStartedAt) !== Date.parse(prior.windowStartedAt)
+            || Date.parse(receipt.windowEndedAt) < Date.parse(prior.windowEndedAt)
+            || prior.coverage === "complete" && receipt.coverage !== "complete") {
+          throw new Error("Operating receipts must cover one cumulative component window; combine separate charges before importing");
+        }
+      }
+    }
     await mkdir(directory, { recursive: true, mode: 0o700 });
     await retain(path.join(directory, `${receipt.evidenceSha256}.evidence`), evidence);
     await retain(path.join(directory, `${observation.observationId.split(":")[1]}.receipt.json`), Buffer.from(`${JSON.stringify(canonical(receipt), null, 2)}\n`));
@@ -78,7 +103,7 @@ export async function importOperatingReceipt(ledgerPath: string, receipt: EvalOp
       const directoryHandle = await open(durableDirectory, "r");
       try { await directoryHandle.sync(); } finally { await directoryHandle.close(); }
     }
-    if (!(await readEvalCostLedger(ledgerPath)).state.observations.has(observation.observationId)) await ledger.observe(observation);
+    if (!current.observations.has(observation.observationId)) await ledger.observe(observation);
     return ledger.snapshot();
   } finally { await ledger.close(); }
 }
