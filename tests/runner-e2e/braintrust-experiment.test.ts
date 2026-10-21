@@ -67,6 +67,22 @@ it("changes experiment identity for changed evidence while keeping unknown accou
   expect(after.metadata.missing_attempts).toBe(1);
 });
 
+it("imports carried-forward receipts with their original campaign, revision, and grades", () => {
+  const { campaign, originals } = fixture();
+  const report = { ...campaign, campaignId: "later-ci-attempt" };
+  const before = structuredClone(originals);
+  const plan = buildBraintrustExperiment(projectId, report, originals);
+  expect(plan.metadata.campaign_id).toBe("later-ci-attempt");
+  expect(plan.events.every(row => row.metadata.campaign_id === "retained-pilot")).toBe(true);
+  expect(plan.events.map(row => row.input.source_revision).sort()).toEqual(["a".repeat(40), "b".repeat(40)]);
+  expect(plan.events.map(row => row.scores.product_pass).sort()).toEqual([0, 1]);
+  expect(plan.events.map(row => row.id)).toEqual(buildBraintrustExperiment(projectId, campaign, originals).events.map(row => row.id));
+  expect(originals).toEqual(before);
+  const wrong = structuredClone(originals);
+  wrong[0]!.accountingIdentity!.campaignId = report.campaignId;
+  expect(() => buildBraintrustExperiment(projectId, report, wrong)).toThrow();
+});
+
 it("imports original grades when report evidence validation changes the selected outcome", () => {
   const { campaign, originals } = fixture();
   const adjusted = structuredClone(campaign);
@@ -110,6 +126,12 @@ it("keeps precise ledger amounts and reservations separate from trace metrics an
   expect(plan.events.find(row => row.metadata.attempt_id === "first")!.metadata.request_ledger).toMatchObject({ unresolved_requests: 1 });
   expect(plan.events.find(row => row.metadata.attempt_id === "second")!.metadata.request_ledger).toBeNull();
   expect(plan.events.every(row => Object.keys(row.metrics).sort().join() === "end,start")).toBe(true);
+  const carried = buildBraintrustExperiment(projectId, {
+    ...campaign, campaignId: "later-ci-attempt",
+    operations: { ...campaign.operations, ledgerCampaignId: "later-ci-attempt" },
+  }, originals);
+  expect(carried.metadata.request_ledger).toMatchObject({ requests: 1 });
+  expect(carried.events.every(row => row.metadata.request_ledger === null)).toBe(true);
 });
 
 function receiver(campaign: ReturnType<typeof fixture>["campaign"], originals: RunnerE2EResult[]) {

@@ -125,6 +125,9 @@ Inspect the plan. To import it, provide `BRAINTRUST_API_KEY` securely, remove
 requires explicit accounting identities and source/definition hashes; older
 incomplete provenance fails closed. It retains original failed and successful
 grades, cleanup outcomes, feedback counts, source revisions and trace identities.
+Carried-forward CI attempts retain their original campaign IDs and must match
+the report's retained receipts. Request costs attach only when the attempt's
+campaign also matches the journal's campaign, even if attempt IDs coincide.
 It does not upload prompts, feedback bodies, matcher details or raw errors.
 
 The evidence digest determines the private experiment name. Identical evidence

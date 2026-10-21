@@ -66,7 +66,7 @@ export function buildBraintrustExperiment(projectId: string, campaign: RunnerE2E
   const candidates = new Map<string, { original: RunnerE2EResult; projection: ReturnType<typeof attemptProjection> }>();
   for (const original of originals) {
     const projection = attemptProjection(original, projectId);
-    if (original.accountingIdentity!.campaignId !== campaign.campaignId || !campaign.expected.includes(original.executionId)) invalid();
+    if (!campaign.expected.includes(original.executionId)) invalid();
     const receipt = buildCampaignAccounting({ results: [original] }).attempts[0]!;
     const retained = accounting.attempts.find(attempt => attempt.id === receipt.id);
     if (!retained || JSON.stringify(retained) !== JSON.stringify(receipt)) invalid();
@@ -84,7 +84,9 @@ export function buildBraintrustExperiment(projectId: string, campaign: RunnerE2E
         || digest(original.projection.metadata) !== digest(selectedProjection.metadata)) invalid();
   }
   const events = [...candidates.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([id, { original, projection }]) => {
-    const cost = operations?.attempts.find(row => row.executionId === original.executionId && row.attemptId === original.accountingIdentity!.attemptId);
+    const cost = operations && original.accountingIdentity!.campaignId === operations.ledgerCampaignId
+      ? operations.attempts.find(row => row.executionId === original.executionId && row.attemptId === original.accountingIdentity!.attemptId)
+      : undefined;
     return { ...projection, id, span_id: id, root_span_id: id,
       metadata: { ...projection.metadata, request_ledger: cost ? {
         known_usd: cost.knownUsd, additional_held_usd: cost.heldUsd, requests: cost.requests,
