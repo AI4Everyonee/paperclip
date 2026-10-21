@@ -887,15 +887,19 @@ describe("AgentConfigForm environment selector", () => {
     expect(result.onSave).toHaveBeenCalledWith({ name: "Renamed Claude" });
   });
 
-  it.each([{ provider: "opencode", model: "openrouter/anthropic/claude-sonnet-4.6" }, { provider: "unknown-provider" }])("preserves saved native $provider configuration with the experimental gate off", async adapterConfig => {
+  it.each([{ provider: "opencode", model: "openrouter/anthropic/claude-sonnet-4.6" }, { provider: "acpx", acpxAgent: "pi", model: "openrouter/anthropic/claude-sonnet-4.6", piThinkingLevel: "max", acpxPermissionMode: "approve-reads", lifecycleMode: "warm" }, { provider: "unknown-provider" }])("preserves saved native $provider configuration with the experimental gate off", async adapterConfig => {
     mockInstanceSettingsApi.getExperimental.mockResolvedValue({ enableNativeRunner: false });
     const result = await renderForm([], { adapterType: "paperclip_runner", adapterConfig }, { showAdapterTypeField: true });
     roots.push(result.root);
-    if (adapterConfig.provider === "opencode") {
-      expect(result.container.querySelector('[aria-label="Harness"]')?.textContent).toContain("OpenCode");
+    if (adapterConfig.provider === "opencode" || adapterConfig.acpxAgent === "pi") {
+      expect(result.container.querySelector('[aria-label="Harness"]')?.textContent).toContain(adapterConfig.provider === "opencode" ? "OpenCode" : "Pi");
       await clickByText(result.container, "Advanced");
       expect(result.container.querySelector('[aria-label="Runner"]')?.textContent).toContain("Paperclip Runner");
     } else expect(result.container.querySelector('[aria-label="Runner"]')).toBeNull();
+    if (adapterConfig.acpxAgent === "pi") {
+      expect(result.container.querySelector('[aria-label="Pi thinking level"]')).not.toBeNull();
+      expect(result.container.querySelector('[aria-label="Thinking effort"]')).toBeNull();
+    }
     await act(async () => setInputValue(result.container.querySelector<HTMLInputElement>('[placeholder="Agent name"]')!, "Renamed native agent"));
     await flushReact();
     await clickByText(result.container, "Save");
