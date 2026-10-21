@@ -45,9 +45,7 @@ export function scheduledOperatingOverhead(raw: string | undefined, runner: stri
   let value: EvalOperatingOverhead;
   try { value = JSON.parse(raw); } catch { throw new Error("Invalid operating overhead JSON"); }
   validateOperatingOverhead(value, totalUsd);
-  const expected = runner === "ubuntu-latest" ? "github-hosted"
-    : runner === "runs-on/fleet=paperclip-public-pr-x64/env=public-ci" ? "aws-fleet" : undefined;
-  if (!expected || value.runner !== expected) throw new Error("Operating overhead runner does not match the selected runner");
+  if (runner !== "ubuntu-latest" || value.runner !== "github-hosted") throw new Error("Bounded campaigns require the standard GitHub-hosted runner allowance");
   if (!Number.isFinite(now) || now < Date.parse(value.verifiedAt) || now + 4 * 3_600_000 >= Date.parse(value.expiresAt)) {
     throw new Error("Operating overhead allowance needs review before paid admission");
   }

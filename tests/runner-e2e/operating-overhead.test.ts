@@ -12,7 +12,7 @@ const allowance = (): EvalOperatingOverhead => ({ version: 1, reference: "fixtur
   components: EVAL_OVERHEAD_COMPONENTS.map(component => ({ component, maxUsd: "1", reference: `fixture-${component}` })) });
 const currentAllowance = (time = Date.now()): EvalOperatingOverhead => ({ ...allowance(),
   verifiedAt: new Date(time - 86_400_000).toISOString(), expiresAt: new Date(time + 30 * 86_400_000).toISOString() });
-const runner = "runs-on/fleet=paperclip-public-pr-x64/env=public-ci";
+const runner = "ubuntu-latest";
 const modelIdentity = { executionId: "claude.local.fixture", attemptId: "attempt-1", phase: "agent" as const };
 
 it("keeps operating overhead inside the same cap through model completion and a journal restart", async () => {
@@ -81,11 +81,13 @@ it("requires each cost category once and rejects unknown policy fields or missin
 });
 
 it("requires fresh reviewed allowances tied to the actual CI runner before scheduled work", () => {
-  const raw = JSON.stringify(allowance());
-  expect(scheduledOperatingOverhead(raw, runner, "20", now)).toEqual(allowance());
+  const hosted = { ...allowance(), runner: "github-hosted" as const };
+  const raw = JSON.stringify(hosted);
+  expect(scheduledOperatingOverhead(raw, runner, "20", now)).toEqual(hosted);
   expect(() => scheduledOperatingOverhead(undefined, runner, "20", now)).toThrow("Missing reviewed");
   expect(() => scheduledOperatingOverhead("not json", runner, "20", now)).toThrow("JSON");
-  expect(() => scheduledOperatingOverhead(raw, "ubuntu-latest", "20", now)).toThrow("runner");
+  expect(() => scheduledOperatingOverhead(JSON.stringify(allowance()), runner, "20", now)).toThrow("runner");
+  expect(() => scheduledOperatingOverhead(raw, "runs-on/fleet=paperclip-public-pr-x64/env=public-ci", "20", now)).toThrow("runner");
   expect(() => scheduledOperatingOverhead(raw, "unrecognized", "20", now)).toThrow("runner");
   expect(() => scheduledOperatingOverhead(raw, runner, "20", Date.parse("2026-10-19T23:59:59Z"))).toThrow("needs review");
   expect(() => scheduledOperatingOverhead(raw, runner, "20", Date.parse("2026-11-18T20:00:00Z"))).toThrow("needs review");

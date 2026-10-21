@@ -153,12 +153,23 @@ jobs:
         id: runner
         env:
           AWS_PAID_RUNNER_ENABLED: ${{ vars.RUNNER_E2E_AWS_ENABLED }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVAL_CADENCE: ${{ inputs.cadence || 'manual' }}
+          REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
         run: |
           set -euo pipefail
           github_runner='ubuntu-latest'
           aws_runner='runs-on/fleet=paperclip-public-pr-x64/env=public-ci'
+          bounded=false
+          if [ "$EVENT_NAME" = schedule ] || [ "$EVAL_CADENCE" != manual ]; then
+            if [ "$REPOSITORY_PRIVATE" != false ]; then
+              echo 'Bounded campaigns require a public repository and standard GitHub-hosted compute.' >&2
+              exit 1
+            fi
+            bounded=true
+          fi
 
-          if [ "$AWS_PAID_RUNNER_ENABLED" = true ]; then
+          if [ "$AWS_PAID_RUNNER_ENABLED" = true ] && [ "$bounded" = false ]; then
             {
               echo "runner=$aws_runner"
               echo "max_parallel_default=100"
@@ -173,7 +184,7 @@ jobs:
               echo "max_parallel_limit=57"
               echo "playwright_channel="
             } >> "$GITHUB_OUTPUT"
-            echo '::notice title=Paid runner routing::RUNNER_E2E_AWS_ENABLED is not true; using the proven GitHub-hosted runner'
+            echo '::notice title=Paid runner routing::Using a standard GitHub-hosted runner'
           fi
 
   target_lock:

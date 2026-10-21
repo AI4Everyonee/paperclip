@@ -159,6 +159,15 @@ There is no separate scheduler. The protected `runner-e2e-paid` environment need
 the exact project UUID. The key is available only to the bounded execution and
 finalization step, after dependency installation and immutable builds.
 
+Bounded daily/weekly campaigns require a public repository and use the existing
+standard `ubuntu-latest` runner for both compilation and execution. They do not
+follow the manual campaign's AWS runner switch. GitHub charges no standard
+hosted compute minutes for public repositories; retain runner/job evidence and
+recheck the [billing policy](https://docs.github.com/en/billing/concepts/product-billing/github-actions)
+when reviewing the allowance. This does not establish zero artifact, cache,
+external history, observability or subscription cost. Manual selections keep
+the existing AWS/GitHub runner choice.
+
 Daily selects native Claude's marker and feedback-persistence cases with a shared
 $20 allowance. Weekly adds native Codex's two corresponding cases with a
 shared $100 allowance. Model requests and declared operating overhead share
@@ -172,7 +181,7 @@ total or a provider-enforced billing limit.
 
 Before enabling recurrence, set `RUNNER_E2E_OPERATING_OVERHEAD_JSON` to a reviewed
 allowance with `version: 1`, an evidence `reference`, the actual `runner`
-(`github-hosted` or `aws-fleet`), and `verifiedAt`/`expiresAt` timestamps no more
+(`github-hosted` for bounded schedules), and `verifiedAt`/`expiresAt` timestamps no more
 than 31 days apart. Its `components` array must contain exactly `ci_compute`,
 `artifact_storage`, `observability`, and `shared_subscription`. Each component
 needs a USD-string `maxUsd` and its own evidence `reference`. References are
@@ -184,7 +193,7 @@ included or zero incremental charge; setting a zero allowance is not a receipt.
 
 The catalog checks that this allowance matches the selected runner, covers at
 least the next four hours, and leaves room for a full conservative model-request
-reservation. This happens before the AWS test runner starts. The workflow passes
+reservation. This happens before the build and test runners start. The workflow passes
 the exact validated allowance to preparation; it does not read a potentially
 changed repository variable again. Preparation rechecks it and retains it in the
 manifest and forecast. Setup, builds, failed jobs, publication and retained
