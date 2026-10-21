@@ -121,14 +121,25 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           TARGET_BRANCH: ${{ inputs.target_branch || github.event.repository.default_branch }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVAL_CADENCE: ${{ inputs.cadence || 'manual' }}
         run: |
           set -euo pipefail
           if [ -z "$TARGET_BRANCH" ] || [[ "$TARGET_BRANCH" == refs/* ]]; then
             echo "target_branch must name a branch in this repository without a refs/ prefix." >&2
             exit 1
           fi
-          encoded_branch="$(jq -rn --arg branch "$TARGET_BRANCH" '$branch | @uri')"
-          target_sha="$(gh api -X GET "repos/$REPOSITORY/branches/$encoded_branch" --jq .commit.sha)"
+          if [ "$EVENT_NAME" = schedule ] || [ "$EVAL_CADENCE" != manual ]; then
+            if [ "$TARGET_BRANCH" != "$DEFAULT_BRANCH" ]; then
+              echo "Bounded campaigns require the workflow's default-branch commit." >&2
+              exit 1
+            fi
+            target_sha="$GITHUB_SHA"
+          else
+            encoded_branch="$(jq -rn --arg branch "$TARGET_BRANCH" '$branch | @uri')"
+            target_sha="$(gh api -X GET "repos/$REPOSITORY/branches/$encoded_branch" --jq .commit.sha)"
+          fi
           if ! [[ "$target_sha" =~ ^[0-9a-f]{40}$ ]]; then
             echo "The requested repository branch did not resolve to a commit." >&2
             exit 1
