@@ -93,7 +93,7 @@ describe("public repository paid workflow security", () => {
     const workflows = [
       {
         name: "runner-full-stack-e2e.yml",
-        expectedCachedSetupNodeSteps: 4,
+        expectedCachedSetupNodeSteps: 3,
       },
       {
         name: "pr-trusted.yml",
@@ -869,5 +869,27 @@ describe("public repository paid workflow security", () => {
     expect(
       workflow.indexOf("pnpm test:e2e:runner:history:publish"),
     ).toBeLessThan(workflow.indexOf("actions/upload-pages-artifact@"));
+  });
+
+  it("does not restore dependency caches or run install scripts in OIDC-authorized jobs", async () => {
+    const workflow = await readFile(path.join(repositoryRoot, ".github/workflows/runner-full-stack-e2e.yml"), "utf8");
+    const jobs = workflow.split(/\n(?=  [a-z_]+:)/u);
+    const paidSteps = workflow.split("steps: &paid_test_steps")[1]!.split("\n  test_recurring:")[0]!;
+    const oidcJobs = jobs.filter(job => job.includes("id-token: write"));
+    expect(oidcJobs.length).toBeGreaterThanOrEqual(3);
+    for (const job of oidcJobs) {
+      const steps = job + (job.includes("steps: *paid_test_steps") ? paidSteps : "");
+      expect(steps, job.split("\n")[0]).not.toMatch(/cache:\s*(?:pnpm|npm|yarn)\b/u);
+      expect(steps).not.toMatch(/actions\/cache(?:\/restore)?@/u);
+      for (const install of steps.matchAll(/\bpnpm install[^\n]*/gu)) {
+        expect(install[0]).toContain("--ignore-scripts");
+      }
+    }
+    for (const name of ["report", "publish_history"]) {
+      const job = jobs.find(value => value.startsWith(`  ${name}:`))!;
+      const installs = [...job.matchAll(/\bpnpm install[^\n]*/gu)];
+      expect(installs).toHaveLength(2);
+      for (const install of installs) expect(install[0]).toContain('--store-dir "${{ runner.temp }}/eval-');
+    }
   });
 });
