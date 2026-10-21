@@ -94,11 +94,13 @@ estimate with the invoice that later reconciles that same usage.
 | CI compute | Workflow/job IDs, runner type, actual billed runtime and invoice rates; include setup, builds and failed jobs | Mark CI cost unknown; a short agent turn does not imply a cheap CI job |
 | Storage and transfer | Artifact size, retention window and billed storage/egress | Report the unpriced component, including retained failure evidence |
 | Braintrust/gateway usage | Project usage export and its window; distinguish included allowance from incremental overage | Do not treat free-looking trace metrics as proof of zero provider charges |
-| Shared subscriptions | Invoice plus an explicit allocation rule, such as the campaign's share of processed bytes or measured resource time | Keep the shared charge unallocated rather than assign an invented exact per-test cost |
+| Shared subscriptions | Show the existing Braintrust Pro $249/month separately under the October 21 operator policy; allocate newly incurred subscription/capacity charges from invoices with an explicit denominator | Keep new shared charges unallocated rather than assign an invented exact per-test cost |
 
 Retain both the service total and the allocation denominator so allocated
 amounts can be reproduced. A zero incremental usage charge can coexist with a
 nonzero shared subscription. Never add the entire subscription to every test.
+The approved daily/weekly budgets cover additional run costs, so they exclude
+the existing $249/month fee while including new usage and capacity charges.
 Scheduled admission now reserves the declared CI, storage, observability and
 subscription allowances inside the same $20/$100 journal limit. Missing or stale
 allowances stop scheduling before the AWS test runner starts. Missing receipts
