@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
-import { mkdir, open, readFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { link, mkdir, open, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { openEvalCostLedger, readEvalCostLedger, validEvalLedgerId, type EvalCostObservation } from "./cost-ledger.js";
@@ -55,18 +55,21 @@ export function operatingReceiptObservation(receipt: EvalOperatingReceipt, campa
 }
 
 async function retain(file: string, bytes: Buffer) {
-  let handle;
-  try { handle = await open(file, "wx", 0o600); }
-  catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-    const existing = await open(file, "r+");
-    try {
-      if (!(await existing.readFile()).equals(bytes)) throw new Error("Retained operating evidence conflicts");
-      await existing.sync();
-    } finally { await existing.close(); }
-    return;
-  }
-  try { await handle.writeFile(bytes); await handle.sync(); } finally { await handle.close(); }
+  const temporary = `${file}.${randomUUID()}.tmp`;
+  const handle = await open(temporary, "wx", 0o600);
+  try {
+    try { await handle.writeFile(bytes); await handle.sync(); } finally { await handle.close(); }
+    // Hard-link publication is atomic and cannot replace previously retained evidence.
+    try { await link(temporary, file); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      const existing = await open(file, "r+");
+      try {
+        if (!(await existing.readFile()).equals(bytes)) throw new Error("Retained operating evidence conflicts");
+        await existing.sync();
+      } finally { await existing.close(); }
+    }
+  } finally { await rm(temporary, { force: true }); }
 }
 
 export async function importOperatingReceipt(ledgerPath: string, receipt: EvalOperatingReceipt, evidence: Buffer) {
