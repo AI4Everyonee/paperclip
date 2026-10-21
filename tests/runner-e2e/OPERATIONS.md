@@ -148,6 +148,8 @@ remain unqualified and are not silently included by `--all`.
 
 Dispatch `cadence: daily` or `weekly` from the default branch to qualify the same
 path manually. Bounded dispatch rejects custom target revisions and selectors.
+Bounded authorization pins the commit from the workflow event; a later merge
+does not replace that revision or invalidate a queued campaign.
 Workflow attempts after the first cannot start paid work with a fresh journal.
 Rerunning reporting can reuse the original attempt-one evidence. Recover the
 retained ledger for a deliberately resumed campaign; do not reset it or launch a
@@ -158,7 +160,7 @@ After execution, deterministic review dismisses only exact synthetic feedback
 bodies corroborated by all feedback-persistence graders. Novel feedback remains
 `needs_investigation`; no extra model call is made. Missing accounting, unresolved
 receipts, feedback collection/submission failures, novel feedback, export failure
-and incomplete experiment import fail the job with bounded diagnostic codes.
+and incomplete experiment import or indexing fail the job with bounded diagnostic codes.
 Successful unchanged runs produce artifacts without posting messages. GitHub's
 workflow failure notifications remain the operator's notification channel.
 Missing/non-starting schedules require an external workflow monitor; this change
@@ -166,11 +168,17 @@ does not claim that a workflow can detect its own failure to start.
 
 Original grades are imported into Braintrust without rerunning agents. The
 access-controlled artifact includes the journal, forecast, feedback dispositions,
-experiment receipt and findings. The trusted report job rebuilds the dashboard
+experiment receipt, indexing receipt and findings. The trusted report job rebuilds the dashboard
 and retains its evidence-bound experiment link. Export acceptance and native
-indexing are separate: `findings.json` still labels indexing unverified. Codex's
-native exports can be high volume and Braintrust can double-count native/log
-observations; use the deduplicated gateway ledger as the estimate authority.
+indexing are separate. A bounded, read-only Braintrust query verifies the attempt
+root, finalization, native API activity and any expected feedback tools. It also
+compares indexed experiment rows with original grades, revisions and attempt IDs.
+The verifier tries at most three rounds within 45 seconds, retains missing/query
+failures, and never reruns an agent. Native record counts measure export volume,
+not distinct provider requests or charges. Codex exports can be high volume and
+Braintrust can double-count native/log observations; use the deduplicated gateway
+ledger as the estimate authority. Private indexing receipts contain only counts,
+identities and verification status, without trace contents or credentials.
 
 ## Inspection and limits
 

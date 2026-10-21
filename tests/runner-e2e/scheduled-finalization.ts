@@ -2,7 +2,8 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { evalBraintrustConfig } from "./braintrust.js";
-import { importBraintrustExperiment } from "./braintrust-experiment.js";
+import { importBraintrustExperiment, type BraintrustExperimentReceipt } from "./braintrust-experiment.js";
+import { verifyBraintrustIndexing } from "./braintrust-indexing.js";
 import { feedbackReviewTemplate, validateCampaignFeedbackReview, type CampaignFeedbackReview } from "./feedback-dispositions.js";
 import { expectedFixtureFeedback } from "./feedback-persistence.js";
 import { feedbackReview, summarizeCampaignFeedback, type FeedbackEvidence } from "./feedback.js";
@@ -71,14 +72,24 @@ export async function finalizeScheduledCampaign(env: NodeJS.ProcessEnv) {
   await writeFile(path.join(directory, "feedback-review.json"), `${JSON.stringify(campaign.feedbackReview, null, 2)}\n`, { mode: 0o600 });
   const findings = scheduledCampaignFindings(campaign);
   const config = evalBraintrustConfig(env);
+  let experiment: BraintrustExperimentReceipt | undefined;
   try {
     if (!config) throw new Error("Missing Braintrust export configuration");
     await importBraintrustExperiment(config, campaign, originals, async receipt => {
       await writeFile(path.join(directory, "experiment-receipt.json"), `${JSON.stringify(receipt, null, 2)}\n`, { mode: 0o600 });
+      experiment = receipt;
     });
   } catch { findings.push("experiment_import_incomplete"); }
+  let indexing = "unavailable";
+  try {
+    if (!config) throw new Error("Missing Braintrust query configuration");
+    const receipt = await verifyBraintrustIndexing(config, campaign, originals, experiment);
+    indexing = receipt.status;
+    await writeFile(path.join(directory, "indexing-receipt.json"), `${JSON.stringify(receipt, null, 2)}\n`, { mode: 0o600 });
+  } catch {}
+  if (indexing !== "verified") findings.push("trace_or_experiment_indexing_incomplete");
   await writeFile(path.join(directory, "findings.json"), `${JSON.stringify({ version: 1, findings,
-    nativeIndexVerification: "unverified", invoiceReconciliation: "pending",
+    nativeIndexVerification: indexing, invoiceReconciliation: "pending",
     feedbackReviewMethod: "Only exact synthetic fixture bodies with all corroborating graders are automatically dismissed; all other feedback requires review" }, null, 2)}\n`, { mode: 0o600 });
   for (const finding of findings) console.error(`::error title=Eval operations::${finding}`);
   return findings;
