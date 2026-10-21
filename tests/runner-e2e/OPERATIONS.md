@@ -31,12 +31,17 @@ expire after 30 days. These are source-byte and retention controls, not measured
 compressed storage charges. ZIP framing and platform billing need separate receipts.
 
 Evidence and reports are copied into fresh private staging directories. Up to
-4,096 directory entries are inspected. Accounting under `scheduled/` and JSON
-records have priority over logs, images and archives. Each retained file has a
+4,096 directory entries are inspected. Discovery visits accounting and snapshot
+directories across attempts before archive and Playwright diagnostic directories.
+Accounting under `scheduled/` and JSON records have copy priority over logs,
+images and archives. Each retained file has a
 SHA-256 digest. The staging receipt reserves 8 MiB inside the total and identifies
 missing, changed, unsafe or oversized files and incomplete traversal. Originals
-are never deleted or rewritten. Hidden paths remain excluded and make the scope
-incomplete. Partial staging is uploaded before the workflow
+are never deleted or rewritten. Hidden paths remain excluded. The expected regular
+`playwright-output/.last-run.json` bookkeeping file is outside the retained evidence
+scope and does not fail retention. Other hidden paths make the scope incomplete.
+Skipped paths and unvisited subtrees are named; overlong names use a bounded preview
+and full-path digest. Partial staging is uploaded before the workflow
 fails, so a storage limit cannot silently turn missing evidence into success.
 These upload limits do not cap runtime disk writes, Actions caches, public S3
 history or Pages. Those resources still need their own operating-cost evidence.

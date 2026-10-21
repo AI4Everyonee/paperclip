@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, readFile, rm, stat, symlink, truncate, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -53,7 +54,8 @@ test("bounds entry inventory and exposes partial traversal", async () => fixture
   for (let i = 0; i < 5; i++) await writeFile(path.join(source, `${i}.json`), "{}");
   const result = await stageBoundedArtifact("evidence", source, out, { ...bounds, entries: 3 });
   assert.equal(result.inventoryComplete, false); assert.equal(result.sourceComplete, false);
-  assert.equal(result.files.length, 3); assert.deepEqual(result.findings, ["entry_limit"]);
+  assert.equal(result.files.filter(row => row.retained).length, 3); assert.deepEqual(result.findings, ["entry_limit"]);
+  assert.deepEqual(result.files.find(row => row.reason === "entry_limit"), { path: ".", scope: "subtree", retained: false, reason: "entry_limit" });
 }));
 
 test("keeps hidden files excluded from upload and exposes that incomplete scope", async () => fixture(async ({ source, out }) => {
@@ -62,7 +64,49 @@ test("keeps hidden files excluded from upload and exposes that incomplete scope"
   const result = await stageBoundedArtifact("evidence", source, out, bounds);
   assert.equal(result.inventoryComplete, false); assert.equal(result.sourceComplete, false);
   assert.deepEqual(result.findings, ["hidden_path_excluded"]);
+  assert.deepEqual(result.files, [{ path: ".private", scope: "subtree", retained: false, reason: "hidden_path_excluded" }]);
   await assert.rejects(stat(path.join(out, ".private")), { code: "ENOENT" });
+}));
+
+test("excludes ordinary packaged Playwright bookkeeping without failing passing evidence", async () => fixture(async ({ source, out }) => {
+  const folder = "core-compatibility/runner-codex/local/message-marker/attempt-1";
+  await mkdir(path.join(source, folder, "playwright-output"), { recursive: true });
+  await writeFile(path.join(source, folder, "playwright-output/.last-run.json"), '{"status":"passed","failedTests":[]}');
+  await writeFile(path.join(source, folder, "result.json"), '{"status":"passed"}');
+  const result = await stageBoundedArtifact("evidence", source, out, bounds);
+  assert.equal(result.sourceComplete, true); assert.equal(result.inventoryComplete, true);
+  assert.deepEqual(result.findings, []);
+  assert.equal(result.files.find(row => row.path.endsWith(".last-run.json")).reason, "playwright_bookkeeping_excluded");
+  assert.equal(await readFile(path.join(out, folder, "result.json"), "utf8"), '{"status":"passed"}');
+}));
+
+test("discovers snapshots in all attempts before archive directories can consume the entry limit", async () => fixture(async ({ source, out }) => {
+  for (const attempt of ["attempt-a", "attempt-b"]) {
+    await mkdir(path.join(source, attempt, "blob-report"), { recursive: true });
+    await mkdir(path.join(source, attempt, "snapshots"));
+    await writeFile(path.join(source, attempt, "snapshots/feedback.json"), '{"saved":true}');
+    for (let i = 0; i < 20; i++) await writeFile(path.join(source, attempt, `blob-report/${i}.zip`), "archive");
+  }
+  const result = await stageBoundedArtifact("evidence", source, out, { ...bounds, entries: 12 });
+  assert.equal(result.sourceComplete, false); assert.equal(result.inventoryComplete, false);
+  for (const attempt of ["attempt-a", "attempt-b"]) {
+    assert.equal(await readFile(path.join(out, attempt, "snapshots/feedback.json"), "utf8"), '{"saved":true}');
+    assert.ok(result.files.some(row => row.path === `${attempt}/blob-report` && row.scope === "subtree" && row.reason === "entry_limit"));
+  }
+}));
+
+test("identifies an overlong skipped subtree with a bounded preview and full path digest", async () => fixture(async ({ source, out }) => {
+  const segments = Array.from({ length: 6 }, (_, index) => `${index}-${"x".repeat(90)}`);
+  await mkdir(path.join(source, ...segments), { recursive: true });
+  await writeFile(path.join(source, ...segments, "feedback.json"), "{}");
+  const result = await stageBoundedArtifact("evidence", source, out, bounds);
+  const omitted = result.files.find(row => row.reason === "path_length_limit");
+  assert.equal(result.sourceComplete, false); assert.equal(result.inventoryComplete, false);
+  assert.equal(omitted.scope, "subtree"); assert.equal(omitted.pathTruncated, true);
+  assert.match(omitted.pathSha256, /^[a-f0-9]{64}$/); assert.ok(omitted.path.startsWith(segments[0]));
+  assert.ok(omitted.path.endsWith(segments[5].slice(-80)));
+  assert.equal(omitted.pathSha256, createHash("sha256").update(segments.join("/")).digest("hex"));
+  assert.ok(result.stagedBytes <= bounds.evidence);
 }));
 
 test("checks immutable build and lock source totals before upload without reading their contents", async () => fixture(async ({ source }) => {

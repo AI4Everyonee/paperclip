@@ -44,36 +44,59 @@ export async function stageBoundedArtifact(kind, source, destination, bounds = A
   }
   await mkdir(out, { mode: 0o700 });
   const receipt = { version: 1, kind, sourceComplete: true, inventoryComplete: true,
+    scope: "Artifact evidence; regular playwright-output/.last-run.json bookkeeping is excluded",
     sourceBytes: 0, retainedBytes: 0, limitBytes: bounds[kind], entryLimit: bounds.entries,
     findings: [], files: [] };
   const candidates = [];
   let visited = 0;
   const finding = code => { receipt.sourceComplete = false; if (!receipt.findings.includes(code)) receipt.findings.push(code); };
-  const scan = async (directory, depth = 0) => {
-    if (depth > 24) { receipt.inventoryComplete = false; finding("directory_depth_limit"); return; }
-    const entries = [];
-    const handle = await opendir(directory);
-    for await (const entry of handle) {
-      if (++visited > bounds.entries) { receipt.inventoryComplete = false; finding("entry_limit"); break; }
-      entries.push(entry);
-    }
-    entries.sort((a, b) => priority(a.name) - priority(b.name) || a.name.localeCompare(b.name));
-    for (const entry of entries) {
-      const absolute = path.join(directory, entry.name), relative = path.relative(root, absolute).split(path.sep).join("/");
-      if (relative.length > 512) { receipt.inventoryComplete = false; finding("path_length_limit"); continue; }
-      if (entry.name.startsWith(".")) { receipt.inventoryComplete = false; finding("hidden_path_excluded"); continue; }
-      if (entry.isDirectory()) {
-        if (visited <= bounds.entries) await scan(absolute, depth + 1);
-        else receipt.inventoryComplete = false;
-      } else if (entry.isFile()) candidates.push({ absolute, relative });
-      else { finding("non_regular_file"); receipt.files.push({ path: relative, retained: false, reason: "non_regular_file" }); }
+  const skipped = (relative, reason, subtree = false) => {
+    const shortened = relative.length > 512 || Buffer.byteLength(JSON.stringify(relative)) > 1024;
+    receipt.files.push({ path: shortened ? `${relative.slice(0, 160)}…${relative.slice(-80)}` : relative,
+      ...(shortened ? { pathTruncated: true, pathSha256: createHash("sha256").update(relative).digest("hex") } : {}),
+      ...(subtree ? { scope: "subtree" } : {}), retained: false, reason });
+  };
+  const scan = async () => {
+    const pending = [{ absolute: root, relative: ".", depth: 0, order: 0 }];
+    while (pending.length) {
+      pending.sort((a, b) => a.order - b.order || a.depth - b.depth || a.relative.localeCompare(b.relative));
+      const directory = pending.shift();
+      if (visited >= bounds.entries || directory.depth > 24) {
+        const reason = visited >= bounds.entries ? "entry_limit" : "directory_depth_limit";
+        receipt.inventoryComplete = false; finding(reason); skipped(directory.relative, reason, true); continue;
+      }
+      try {
+        const handle = await opendir(directory.absolute);
+        for await (const entry of handle) {
+          if (visited >= bounds.entries) {
+            receipt.inventoryComplete = false; finding("entry_limit"); skipped(directory.relative, "entry_limit", true); break;
+          }
+          visited++;
+          const absolute = path.join(directory.absolute, entry.name), relative = path.relative(root, absolute).split(path.sep).join("/");
+          if (relative.length > 512 || Buffer.byteLength(JSON.stringify(relative)) > 1024) {
+            receipt.inventoryComplete = false; finding("path_length_limit"); skipped(relative, "path_length_limit", entry.isDirectory()); continue;
+          }
+          if (entry.isFile() && /(?:^|\/)playwright-output\/\.last-run\.json$/.test(relative)) {
+            skipped(relative, "playwright_bookkeeping_excluded"); continue;
+          }
+          if (entry.name.startsWith(".")) {
+            receipt.inventoryComplete = false; finding("hidden_path_excluded"); skipped(relative, "hidden_path_excluded", entry.isDirectory()); continue;
+          }
+          if (entry.isDirectory()) {
+            const diagnostic = /(?:^|\/)(?:blob-report|html-report|playwright-output)(?:\/|$)/.test(relative);
+            pending.push({ absolute, relative, depth: directory.depth + 1,
+              order: diagnostic ? 3 : relative === "scheduled" || relative.startsWith("scheduled/") ? 0 : 1 });
+          } else if (entry.isFile()) candidates.push({ absolute, relative });
+          else { finding("non_regular_file"); skipped(relative, "non_regular_file"); }
+        }
+      } catch { receipt.inventoryComplete = false; finding("inventory_failed"); skipped(directory.relative, "inventory_failed", true); }
     }
   };
   try {
     const metadata = await lstat(root);
     if (!metadata.isDirectory() || metadata.isSymbolicLink()) throw new Error("Invalid evidence root");
-    await scan(root);
-  } catch { receipt.inventoryComplete = false; finding("inventory_failed"); }
+    await scan();
+  } catch { receipt.inventoryComplete = false; finding("inventory_failed"); skipped(".", "inventory_failed", true); }
   const canonicalRoot = await realpath(root).catch(() => root);
   candidates.sort((a, b) => priority(a.relative) - priority(b.relative) || a.relative.localeCompare(b.relative));
   for (const { absolute, relative } of candidates) {
