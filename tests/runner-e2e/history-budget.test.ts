@@ -1,9 +1,9 @@
-import { mkdtemp, readFile, rm, truncate, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, truncate, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BoundedHistoryPublisher, checkHistoryPayload, HISTORY_LIMITS, validateBoundedHistoryRetention } from "./history-budget.js";
-import { createBundleManifest } from "./history-publish.js";
+import { createBundleManifest, uploadImmutableBundle } from "./history-publish.js";
 import { buildRunnerCampaign, campaignHistoryRecord, emptyRunnerHistory, mergeRunnerHistory } from "./history.js";
 
 const roots: string[] = [];
@@ -41,6 +41,18 @@ describe("bounded public history", () => {
     await writeFile(path.join(root, "index.html"), "");
     await truncate(path.join(root, "index.html"), HISTORY_LIMITS.campaignBytes + 1);
     await expect(createBundleManifest(root, "oversized", false, new Set(), true)).rejects.toThrow("publication boundary");
+  });
+
+  it("uploads an allowlisted uppercase PNG with the same raster content type", async () => {
+    const root = await temporary(); const bundle = path.join(root, "bundle");
+    const screenshot = "evidence/execution/attempt-1/shot.PNG";
+    await mkdir(path.dirname(path.join(bundle, screenshot)), { recursive: true });
+    await writeFile(path.join(bundle, screenshot), Buffer.from("89504e470d0a1a0a0000000d494844520000000100000001", "hex"));
+    const manifest = await createBundleManifest(bundle, "uppercase", false, new Set([screenshot]), true);
+    const runner = vi.fn(async () => ({ stdout: "{}" }));
+    await uploadImmutableBundle("bucket", "campaigns/uppercase", bundle, manifest,
+      new BoundedHistoryPublisher(path.join(root, "receipt.json"), runner));
+    expect(runner).toHaveBeenCalledWith(expect.arrayContaining(["--content-type", "image/png", "--key", `campaigns/uppercase/${screenshot}`]), expect.any(Number));
   });
 
   it("requires expiration for both current and noncurrent versions in the isolated prefix", () => {

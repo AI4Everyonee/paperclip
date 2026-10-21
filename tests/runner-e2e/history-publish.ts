@@ -479,7 +479,7 @@ async function uploadFile(
   ]);
 }
 
-async function uploadImmutableBundle(
+export async function uploadImmutableBundle(
   bucket: string,
   key: string,
   directory: string,
@@ -488,7 +488,7 @@ async function uploadImmutableBundle(
 ) {
   if (bounded && manifest) {
     for (const file of manifest.files) {
-      const extension = path.extname(file.path);
+      const extension = path.extname(file.path).toLowerCase();
       const contentType = ({ ".png": "image/png", ".json": "application/json", ".html": "text/html; charset=utf-8",
         ".woff2": "font/woff2", ".xml": "application/xml", ".md": "text/plain; charset=utf-8" } as Record<string, string>)[extension];
       if (!contentType) throw new Error(`Missing public content type for ${file.path}`);
