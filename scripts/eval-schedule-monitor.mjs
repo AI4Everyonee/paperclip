@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -83,17 +84,38 @@ export async function inspectEvalSchedule({ get, now = Date.now() }) {
 }
 
 const quiet = new Set(["disabled", "waiting", "running", "healthy"]);
-export function monitorTransition(previous, inspection) {
-  if (previous && (previous.version !== 1 || previous.repository !== MONITORED_REPOSITORY
-    || previous.workflow !== MONITORED_WORKFLOW || !previous.signals || typeof previous.signals !== "object")) {
+const statuses = new Set([...quiet, "observed", "configuration_incomplete", "workflow_disabled", "api_unavailable",
+  "missing", "ambiguous_runs", "unexpected_retry", "overdue", "failed", "missing_report"]);
+const object = value => value !== null && typeof value === "object" && !Array.isArray(value);
+const timestamp = value => typeof value === "string" && Number.isFinite(Date.parse(value));
+const notificationId = value => typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
+const signalKey = row => !quiet.has(row.status) ? JSON.stringify([row.status, row.dueAt ?? null, row.runId ?? null]) : row.status;
+const validSignal = row => object(row) && ["monitor", "daily", "weekly"].includes(row.cadence) && statuses.has(row.status)
+  && (row.dueAt === undefined || timestamp(row.dueAt)) && (row.runId === undefined || numericId(row.runId))
+  && (row.runId === undefined ? row.url === undefined : row.url === `https://github.com/${MONITORED_REPOSITORY}/actions/runs/${row.runId}`);
+
+function validateState(previous) {
+  if (!object(previous) || previous.version !== 1 || previous.repository !== MONITORED_REPOSITORY
+    || previous.workflow !== MONITORED_WORKFLOW || !object(previous.signals)
+    || !timestamp(previous.checkedAt) || !(previous.lastSuccessfulInspectionAt === null || timestamp(previous.lastSuccessfulInspectionAt))
+    || !object(previous.lastInspectedRunIds) || Object.entries(previous.lastInspectedRunIds).some(([cadence, id]) => !["daily", "weekly"].includes(cadence) || !numericId(id))
+    || Object.entries(previous.signals).some(([cadence, row]) => !validSignal(row) || row.cadence !== cadence
+      || row.issue !== !quiet.has(row.status) || row.key !== signalKey(row))
+    || !Array.isArray(previous.notifications) || previous.notifications.some(row => !validSignal(row)
+      || !notificationId(row.id) || !["problem", "recovery"].includes(row.kind))
+    || new Set(previous.notifications.map(row => row.id)).size !== previous.notifications.length) {
     throw new Error("Invalid retained monitor state; refusing to reset notification history");
   }
+}
+
+export function monitorTransition(previous, inspection) {
+  if (previous !== undefined) validateState(previous);
   const current = inspection.status === "observed" ? inspection.observations : [signal("monitor", inspection.status)];
   const signals = {}, notifications = [];
   const prior = previous?.signals ?? {};
   for (const row of current) {
     const issue = !quiet.has(row.status);
-    const key = issue ? JSON.stringify([row.status, row.dueAt ?? null, row.runId ?? null]) : row.status;
+    const key = signalKey(row);
     signals[row.cadence] = { ...row, issue, key };
     if (issue && prior[row.cadence]?.key !== key) notifications.push({ kind: "problem", ...row });
     else if (!issue && prior[row.cadence]?.issue && row.status !== "disabled") notifications.push({ kind: "recovery", ...row });
@@ -105,29 +127,47 @@ export function monitorTransition(previous, inspection) {
     lastSuccessfulInspectionAt: readable ? inspection.observedAt : previous?.lastSuccessfulInspectionAt ?? null,
     lastInspectedRunIds: { ...previous?.lastInspectedRunIds,
       ...Object.fromEntries(inspection.observations.filter(row => row.runId).map(row => [row.cadence, row.runId])) },
-    signals: inspection.status === "observed" || quiet.has(inspection.status) ? signals : { ...prior, ...signals }, notifications };
+    signals: inspection.status === "observed" || quiet.has(inspection.status) ? signals : { ...prior, ...signals },
+    notifications: [...previous?.notifications ?? [], ...notifications.map(row => ({ id: randomUUID(), ...row }))] };
+}
+
+async function saveState(stateFile, next) {
+  await mkdir(path.dirname(stateFile), { recursive: true, mode: 0o700 });
+  await writeFile(`${stateFile}.pending`, JSON.stringify(next, null, 2) + "\n", { mode: 0o600 });
+  await rename(`${stateFile}.pending`, stateFile);
+}
+
+export async function acknowledgeEvalNotifications(stateFile, ids) {
+  if (!Array.isArray(ids) || !ids.length || ids.some(id => !notificationId(id))) throw new Error("Invalid notification acknowledgments");
+  const previous = JSON.parse(await readFile(stateFile, "utf8"));
+  validateState(previous);
+  const next = { ...previous, notifications: previous.notifications.filter(row => !ids.includes(row.id)) };
+  await saveState(stateFile, next);
+  return { acknowledged: previous.notifications.length - next.notifications.length, pending: next.notifications.length };
 }
 
 export async function runEvalMonitor(stateFile, get, now = Date.now()) {
   let previous;
-  try { previous = JSON.parse(await readFile(stateFile, "utf8")); }
+  try { previous = JSON.parse(await readFile(stateFile, "utf8")); validateState(previous); }
   catch (error) { if (error.code !== "ENOENT") throw error; }
   const inspection = await inspectEvalSchedule({ get, now });
   const next = monitorTransition(previous, inspection);
-  await mkdir(path.dirname(stateFile), { recursive: true, mode: 0o700 });
-  await writeFile(`${stateFile}.pending`, JSON.stringify(next, null, 2) + "\n", { mode: 0o600 });
-  await rename(`${stateFile}.pending`, stateFile);
+  await saveState(stateFile, next);
   return { ...inspection, lastSuccessfulInspectionAt: next.lastSuccessfulInspectionAt,
     lastInspectedRunIds: next.lastInspectedRunIds, notifications: next.notifications };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  if (process.argv.length !== 3) throw new Error("Usage: node scripts/eval-schedule-monitor.mjs <private-state-file>");
+  if (process.argv.length !== 3 && !(process.argv[3] === "--ack" && process.argv.length >= 5)) {
+    throw new Error("Usage: node scripts/eval-schedule-monitor.mjs <private-state-file> [--ack <notification-id> ...]");
+  }
   const execute = promisify(execFile);
   const get = async endpoint => {
     if (!endpoint.startsWith(`${prefix}/`)) throw new Error("Unapproved monitor endpoint");
     const { stdout } = await execute("gh", ["api", "--method", "GET", endpoint], { timeout: 15_000, maxBuffer: 4 * 1024 * 1024 });
     return JSON.parse(stdout);
   };
-  console.log(JSON.stringify(await runEvalMonitor(path.resolve(process.argv[2]), get), null, 2));
+  console.log(JSON.stringify(process.argv[3] === "--ack"
+    ? await acknowledgeEvalNotifications(path.resolve(process.argv[2]), process.argv.slice(4))
+    : await runEvalMonitor(path.resolve(process.argv[2]), get), null, 2));
 }

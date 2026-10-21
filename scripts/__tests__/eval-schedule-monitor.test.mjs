@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { expectedCampaign, inspectEvalSchedule, monitorTransition, runEvalMonitor, MONITORED_SCHEDULES } from "../eval-schedule-monitor.mjs";
+import { acknowledgeEvalNotifications, expectedCampaign, inspectEvalSchedule, monitorTransition, runEvalMonitor, MONITORED_SCHEDULES } from "../eval-schedule-monitor.mjs";
 
 const now = Date.parse("2026-10-25T13:00:00Z");
 const enabledAt = "2026-10-24T00:00:00Z";
@@ -100,16 +100,16 @@ test("alerts once per incident and recovery while keeping last observed run IDs 
   const failed = await inspectEvalSchedule({ ...fixture({ runs: [run("daily", 101, { conclusion: "failure" }), run("weekly", 102)] }), now });
   const first = monitorTransition(undefined, failed);
   assert.equal(first.notifications.length, 1);
-  assert.deepEqual(monitorTransition(first, failed).notifications, []);
+  assert.deepEqual(monitorTransition(first, failed).notifications, first.notifications);
   const outage = { observedAt: new Date(now + 1000).toISOString(), status: "api_unavailable", observations: [] };
-  const unavailable = monitorTransition(first, outage);
+  const unavailable = monitorTransition({ ...first, notifications: [] }, outage);
   assert.equal(unavailable.lastSuccessfulInspectionAt, first.lastSuccessfulInspectionAt);
   assert.deepEqual(unavailable.lastInspectedRunIds, { daily: 101, weekly: 102 });
   assert.equal(unavailable.notifications[0].status, "api_unavailable");
-  assert.deepEqual(monitorTransition(unavailable, outage).notifications, []);
-  const resumed = monitorTransition(unavailable, failed);
+  assert.deepEqual(monitorTransition(unavailable, outage).notifications, unavailable.notifications);
+  const resumed = monitorTransition({ ...unavailable, notifications: [] }, failed);
   assert.deepEqual(resumed.notifications.map(row => [row.kind, row.cadence]), [["recovery", "monitor"]]);
-  const healthy = monitorTransition(resumed, await inspectEvalSchedule({ ...fixture(), now }));
+  const healthy = monitorTransition({ ...resumed, notifications: [] }, await inspectEvalSchedule({ ...fixture(), now }));
   assert.deepEqual(healthy.notifications.map(row => [row.kind, row.cadence]), [["recovery", "daily"]]);
 });
 
@@ -117,12 +117,53 @@ test("persists private state across invocations and refuses corrupt history", as
   const directory = await mkdtemp(path.join(os.tmpdir(), "eval-monitor-"));
   try {
     const file = path.join(directory, "state.json");
-    assert.equal((await runEvalMonitor(file, fixture({ runs: [] }).get, now)).notifications.length, 2);
+    const first = await runEvalMonitor(file, fixture({ runs: [] }).get, now);
+    assert.equal(first.notifications.length, 2);
+    const repeated = await runEvalMonitor(file, fixture({ runs: [] }).get, now);
+    assert.deepEqual(repeated.notifications, first.notifications);
+    assert.deepEqual(await acknowledgeEvalNotifications(file, [first.notifications[0].id]), { acknowledged: 1, pending: 1 });
+    const afterPartialDelivery = await runEvalMonitor(file, fixture({ runs: [] }).get, now);
+    assert.deepEqual(afterPartialDelivery.notifications, first.notifications.slice(1));
+    assert.deepEqual(await acknowledgeEvalNotifications(file, first.notifications.map(row => row.id)), { acknowledged: 1, pending: 0 });
     assert.deepEqual((await runEvalMonitor(file, fixture({ runs: [] }).get, now)).notifications, []);
     assert.equal(JSON.parse(await readFile(file, "utf8")).repository, "paperclipai/paperclip");
     await writeFile(file, "bad history");
     await assert.rejects(runEvalMonitor(file, fixture().get, now));
     assert.equal(await readFile(file, "utf8"), "bad history");
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("pending alerts survive later recovery and are acknowledged only after delivery", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "eval-monitor-outbox-"));
+  try {
+    const file = path.join(directory, "state.json");
+    const lostOutput = await runEvalMonitor(file, fixture({ runs: [] }).get, now);
+    const recovered = await runEvalMonitor(file, fixture().get, now + 1000);
+    assert.deepEqual(recovered.notifications.slice(0, 2), lostOutput.notifications);
+    assert.deepEqual(recovered.notifications.map(row => row.kind), ["problem", "problem", "recovery", "recovery"]);
+    const unchanged = await runEvalMonitor(file, fixture().get, now + 2000);
+    assert.deepEqual(unchanged.notifications, recovered.notifications);
+    await assert.rejects(acknowledgeEvalNotifications(file, ["invalid"]));
+    assert.deepEqual(await acknowledgeEvalNotifications(file, recovered.notifications.map(row => row.id)), { acknowledged: 4, pending: 0 });
+    assert.deepEqual((await runEvalMonitor(file, fixture().get, now + 3000)).notifications, []);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("rejects valid JSON with malformed history without querying or overwriting it", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "eval-monitor-corrupt-"));
+  try {
+    const file = path.join(directory, "state.json");
+    await runEvalMonitor(file, fixture().get, now);
+    const valid = JSON.parse(await readFile(file, "utf8"));
+    for (const malformed of [null, false, 0, [], {}, { ...valid, signals: [] }, { ...valid, signals: { daily: null } },
+      { ...valid, notifications: null }, { ...valid, notifications: [{ id: "invalid" }] }]) {
+      const original = JSON.stringify(malformed);
+      await writeFile(file, original);
+      const f = fixture();
+      await assert.rejects(runEvalMonitor(file, f.get, now), /Invalid retained monitor state/);
+      assert.equal(f.calls.length, 0);
+      assert.equal(await readFile(file, "utf8"), original);
+    }
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 

@@ -141,12 +141,22 @@ visible. The observer reads at most 100 rows per collection and fails closed
 if a response is truncated.
 
 Retained state includes the last successful inspection and inspected run IDs.
-`notifications` contains new problems and recovery transitions; the same
-unchanged problem does not alert again. A new missed occurrence is a new
-incident. Disabled recurrence and unchanged healthy runs are quiet. Use one
-writer per state file; do not reset it to clear an incident. A malformed state
-file fails rather than discarding notification history. The external host owns
-delivery of these notifications and monitoring its own liveness.
+`notifications` is a durable outbox of problems and recovery transitions. Each
+entry has an ID. After confirmed delivery, the host acknowledges those IDs:
+
+```sh
+node scripts/eval-schedule-monitor.mjs "$HOME/.config/paperclip-evals/schedule-monitor.json" --ack <notification-id> ...
+```
+
+Until acknowledgment, later inspections return the same pending entries even
+if the problem has recovered. The host uses IDs to deduplicate delivery. This
+survives a process exit between saving state and printing output; it does not
+claim exactly-once delivery across an external notification service. After
+acknowledgment, an unchanged problem stays quiet. A new missed occurrence is a
+new incident. Disabled recurrence and unchanged healthy runs create no new
+alerts. Use one writer for both checks and acknowledgments; do not reset the
+state file to clear an incident. Malformed history fails before a query or
+write. The external host owns notification delivery and its own liveness.
 
 Schedule this observer outside the paid workflow after source and recurrence
 are ready. It should inspect at least daily, after both scheduled start times
