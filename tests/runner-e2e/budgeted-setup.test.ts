@@ -60,3 +60,16 @@ it("does not start a readiness request after the attempt deadline", async () => 
     expect((await readEvalAttemptPhase(f.file, identity)).phase).toBe("setup");
   } finally { await rm(f.directory, { recursive: true, force: true }); }
 });
+
+it("does not advance when saving readiness crosses the deadline", async () => {
+  const f = await fixture(), get = vi.fn().mockResolvedValue(ready);
+  const deadlineAt = Date.now() + 5_000;
+  const now = vi.spyOn(Date, "now");
+  try {
+    await expect(finishBudgetedEvalSetup({ executionId: identity.executionId, agentId: "agent", companyId: "company",
+      deadlineAt, api: { get } as unknown as RunnerApi,
+      observe: async () => { now.mockReturnValue(deadlineAt); } }, f.env)).rejects.toThrow("Timed out saving");
+    expect(get).toHaveBeenCalledOnce();
+    expect((await readEvalAttemptPhase(f.file, identity)).phase).toBe("setup");
+  } finally { now.mockRestore(); await rm(f.directory, { recursive: true, force: true }); }
+});

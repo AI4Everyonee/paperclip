@@ -38,6 +38,7 @@ export async function finishBudgetedEvalSetup(input: {
           : agent.lifecycleHolds?.length ? "Agent setup is held"
             : ["paused", "rejected", "terminated"].includes(agent.lifecycleState ?? "") ? `Agent setup stopped: ${agent.lifecycleState}` : undefined,
     });
+    if (Date.now() >= deadlineAt) throw new Error("Timed out saving budgeted eval agent readiness");
   }
   await beginEvalAgentPhase(input.executionId, env);
 }
