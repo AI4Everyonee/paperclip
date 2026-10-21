@@ -60,10 +60,13 @@ Deploy `.github/infra/runner-e2e-private-history.yml` with the existing GitHub O
 provider and set `RUNNER_E2E_PRIVATE_HISTORY_S3_BUCKET`,
 `RUNNER_E2E_PRIVATE_HISTORY_AWS_ROLE_ARN` and
 `RUNNER_E2E_PRIVATE_HISTORY_AWS_REGION`. The role trusts only this repository's
-`runner-e2e-paid` and `runner-e2e-history` environments. Review both environments'
-deployment branch allowlists before deployment; every allowed branch shares this
-role's trust boundary. This workflow separately requires the default branch before
-paid access. Manual target-branch tests have no OIDC permission. A separate recurring
+`runner-e2e-private-paid` and `runner-e2e-private-history` environments. Create both
+with a deployment branch policy allowing only the default branch. Reserve them
+for this workflow: the shared `runner-e2e-paid` and `runner-e2e-history` environments
+also serve protocol evaluations that execute target-branch code and must not
+have access to the private archive role. Set the three archive variables in both
+dedicated environments. This workflow separately requires the default branch before
+paid access and reporting. Manual target-branch tests have no OIDC permission. A separate recurring
 job receives that permission only when the target SHA equals the default-branch
 workflow SHA. Both jobs reuse the same anchored setup and test steps. The role has configuration reads
 and GetObject/PutObject under `runner-e2e-private/bounded-v1/`; no deletion,
@@ -309,7 +312,7 @@ and weekly on Sunday at 09:47 UTC. Scheduled runs require both
 `RUNNER_FULL_STACK_E2E_NIGHTLY_ENABLED=true` and
 `RUNNER_FULL_STACK_E2E_OPERATIONS_ENABLED=true`. Leave the operations gate unset
 until the workflow, billing coverage and infrastructure allowance are qualified.
-There is no separate scheduler. The protected `runner-e2e-paid` environment needs
+There is no separate scheduler. The protected `runner-e2e-private-paid` environment needs
 `BRAINTRUST_API_KEY`; repository variable `RUNNER_E2E_BRAINTRUST_PROJECT_ID` names
 the exact project UUID. The key is available only to the bounded execution and
 finalization step, after dependency installation and immutable builds.

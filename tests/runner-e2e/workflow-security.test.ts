@@ -832,6 +832,30 @@ describe("public repository paid workflow security", () => {
     expect(marker).not.toMatch(/BUCKET|ROLE_ARN|private-report-reference/);
   });
 
+  it("isolates private archive trust from workflows that execute target-branch code", async () => {
+    const workflows = path.join(repositoryRoot, ".github/workflows");
+    const source = await readFile(path.join(workflows, "runner-full-stack-e2e.yml"), "utf8");
+    const trust = await readFile(path.join(repositoryRoot, ".github/infra/runner-e2e-private-history.yml"), "utf8");
+    const environments = ["runner-e2e-private-paid", "runner-e2e-private-history"];
+    const subjects = [...trust.matchAll(/!Sub 'repo:\$\{GitHubRepository\}:environment:([^']+)'/gu)].map(match => match[1]);
+    expect(subjects).toEqual(environments);
+    const recurring = source.split("\n  test_recurring:")[1]!.split("\n  report:")[0]!;
+    const report = source.split("\n  report:")[1]!.split("\n  publish_history:")[0]!;
+    for (const [index, job] of [recurring, report].entries()) {
+      expect(job).toContain(`name: ${environments[index]}`);
+      expect(job).toContain("github.ref == format('refs/heads/{0}', github.event.repository.default_branch)");
+    }
+    expect(recurring).toContain("needs.authorize.outputs.target_sha == github.sha");
+    for (const filename of await readdir(workflows)) {
+      if (!/\.ya?ml$/u.test(filename) || filename === "runner-full-stack-e2e.yml") continue;
+      const other = await readFile(path.join(workflows, filename), "utf8");
+      for (const environment of environments) expect(other, filename).not.toContain(environment);
+    }
+    const protocol = await readFile(path.join(workflows, "runner-protocol-live-evals.yml"), "utf8");
+    expect(protocol).toContain("name: runner-e2e-paid");
+    expect(protocol).toContain("needs.authorize.outputs.target_sha");
+  });
+
   it("uses environment-scoped OIDC for a no-delete history publisher", async () => {
     const workflow = await readFile(
       path.join(repositoryRoot, ".github/workflows/runner-full-stack-e2e.yml"),
