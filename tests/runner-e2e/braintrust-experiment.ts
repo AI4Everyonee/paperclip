@@ -73,6 +73,11 @@ export function buildBraintrustExperiment(projectId: string, campaign: RunnerE2E
     candidates.set(receipt.id, { original, projection });
   }
   if (candidates.size !== accounting.attempts.length) invalid();
+  for (const selected of campaign.results.filter(result => result.attempt > 0)) {
+    const id = buildCampaignAccounting({ results: [selected] }).attempts[0]!.id;
+    const original = candidates.get(id);
+    if (!original || digest(original.projection) !== digest(attemptProjection(selected, projectId))) invalid();
+  }
   const events = [...candidates.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([id, { original, projection }]) => {
     const cost = operations?.attempts.find(row => row.executionId === original.executionId && row.attemptId === original.accountingIdentity!.attemptId);
     return { ...projection, id, span_id: id, root_span_id: id,
@@ -101,6 +106,11 @@ export interface BraintrustExperimentReceipt {
 
 export function experimentEvidenceHash(campaign: RunnerE2ECampaign) {
   return digest({ campaignId: campaign.campaignId, expected: [...campaign.expected].sort(),
+    selected: campaign.results.map(result => ({ executionId: result.executionId, accountingIdentity: result.accountingIdentity,
+      attempt: result.attempt, startedAt: result.startedAt, sourceRevision: result.source?.sha ?? null,
+      suiteDefinitionHash: result.suiteDefinitionHash ?? null, suiteId: result.suiteId, profileId: result.profileId,
+      caseId: result.caseId, provider: result.provider, model: result.model, environmentId: result.environmentId,
+      runtimeMode: result.runtimeMode })).sort((a, b) => digest(a).localeCompare(digest(b))),
     accounting: campaign.accounting, operations: campaign.operations ?? null, feedbackReview: campaign.feedbackReview ?? null });
 }
 
@@ -154,33 +164,37 @@ async function request(config: EvalBraintrustConfig, endpoint: string, payload: 
 }
 
 export async function importBraintrustExperiment(config: EvalBraintrustConfig, campaign: RunnerE2ECampaign,
-  originals: readonly RunnerE2EResult[], persist: (receipt: BraintrustExperimentReceipt) => Promise<void>, transport: typeof fetch = fetch) {
+  originals: readonly RunnerE2EResult[], persist: (receipt: BraintrustExperimentReceipt) => Promise<void>, transport: typeof fetch = fetch,
+  previous?: BraintrustExperimentReceipt) {
   const plan = buildBraintrustExperiment(config.projectId, campaign, originals);
   if (!config.apiKey?.trim() || /[\r\n]/.test(config.apiKey)) throw new Error("Missing Braintrust ingestion credential");
+  if (previous) {
+    validateBraintrustExperimentReceipt(campaign, previous);
+    if (previous.projectId !== plan.projectId || previous.payloadHash !== plan.payloadHash) invalid();
+  }
   try {
     const created = await request(config, "experiment", { project_id: plan.projectId, name: plan.name,
       public: false, ensure_new: false, metadata: plan.metadata }, transport);
     if (!uuid.test(String(created?.id)) || created.project_id !== plan.projectId || created.name !== plan.name || created.public !== false
         || (created.metadata as Record<string, unknown> | undefined)?.payload_hash !== plan.payloadHash) throw new Error("conflicting_experiment");
-    const receipt: BraintrustExperimentReceipt = { version: 1, projectId: plan.projectId, experimentId: String(created.id),
+    if (previous && previous.experimentId !== created.id) throw new Error("conflicting_experiment");
+    const receipt: BraintrustExperimentReceipt = previous ? { ...previous } : { version: 1, projectId: plan.projectId, experimentId: String(created.id),
       name: plan.name, payloadHash: plan.payloadHash, evidenceHash: experimentEvidenceHash(campaign),
       status: "created", acceptedRows: 0, expectedRows: plan.events.length, verification: "unverified" };
-    await persist({ ...receipt });
+    if (!previous) await persist({ ...receipt });
     for (let offset = 0; offset < plan.events.length; offset += 100) {
       const events = plan.events.slice(offset, offset + 100);
       const inserted = await request(config, `experiment/${receipt.experimentId}/insert`, { events }, transport);
       if (!Array.isArray(inserted?.row_ids) || JSON.stringify([...inserted.row_ids].sort()) !== JSON.stringify(events.map(event => event.id).sort())) throw new Error("missing_rows");
-      receipt.acceptedRows += events.length;
+      receipt.acceptedRows = Math.max(receipt.acceptedRows, offset + events.length);
       if (receipt.acceptedRows === receipt.expectedRows) receipt.status = "accepted";
       await persist({ ...receipt });
     }
-    try {
-      const summary = await request(config, `experiment/${receipt.experimentId}/summarize`, undefined, transport);
-      if (summary.experiment_name === plan.name && safeBraintrustUrl(summary.project_url) && safeBraintrustUrl(summary.experiment_url)) {
-        receipt.projectUrl = summary.project_url; receipt.experimentUrl = summary.experiment_url;
-        await persist({ ...receipt });
-      }
-    } catch {}
+    const summary = await request(config, `experiment/${receipt.experimentId}/summarize`, undefined, transport).catch(() => undefined);
+    if (summary?.experiment_name === plan.name && safeBraintrustUrl(summary.project_url) && safeBraintrustUrl(summary.experiment_url)) {
+      receipt.projectUrl = summary.project_url; receipt.experimentUrl = summary.experiment_url;
+      await persist({ ...receipt });
+    }
     return receipt;
   } catch { throw new Error("Braintrust experiment import incomplete; retain the receipt and retry identical evidence. Remote details withheld."); }
 }

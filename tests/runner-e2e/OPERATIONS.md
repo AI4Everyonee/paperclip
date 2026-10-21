@@ -129,12 +129,15 @@ It does not upload prompts, feedback bodies, matcher details or raw errors.
 
 The evidence digest determines the private experiment name. Identical evidence
 reuses that experiment and stable row IDs after an interrupted insert. Changed
-evidence creates a different experiment. The receipt checkpoints accepted batches;
+evidence creates a different experiment and requires a separate receipt path.
+The importer validates an existing receipt before retrying and never lowers its
+confirmed accepted-row count. The receipt checkpoints accepted batches;
 HTTP acceptance still requires independent indexing/UI verification. Retain failed
 receipts. A retry must use the same original evidence, not newly run agents.
 Set `PAPERCLIP_E2E_BRAINTRUST_EXPERIMENT` to the receipt path when rebuilding the
 campaign report to retain the experiment link. Its evidence hash must match the
-report's attempts, request-ledger checkpoint and feedback review. Refreshing only
+report's selected source/definition identities, attempts, request-ledger checkpoint
+and feedback review. Refreshing only
 the report rendering preserves the link; changed evidence requires a new import.
 
 Request-ledger amounts remain metadata with their journal hash and classifications.

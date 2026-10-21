@@ -143,6 +143,52 @@ it("checkpoints accepted batches before a later insert fails", async () => {
     })).rejects.toThrow("Remote details withheld");
   expect(receipts).toHaveLength(2);
   expect(receipts[1]).toMatchObject({ status: "created", acceptedRows: 100, expectedRows: 101 });
+  const previous = structuredClone(receipts[1]!);
+  calls = 0;
+  await expect(importBraintrustExperiment({ projectId, apiKey: "key" }, campaign, originals,
+    async receipt => { receipts.push(receipt); }, async (url, init) => {
+      if (++calls === 2) throw new Error("retry insert failed");
+      return normal(url, init);
+    }, previous)).rejects.toThrow("Remote details withheld");
+  expect(receipts).toHaveLength(2);
+  expect(receipts.at(-1)).toEqual(previous);
+  await importBraintrustExperiment({ projectId, apiKey: "key" }, campaign, originals,
+    async receipt => { receipts.push(receipt); }, normal, previous);
+  expect(receipts.slice(2).map(receipt => receipt.acceptedRows)).toEqual([100, 101, 101]);
+  expect(receipts.at(-1)!.status).toBe("accepted");
+});
+
+it.each(["source", "definition"])("rejects a saved link and original import after selected %s provenance changes", async kind => {
+  const { campaign, originals } = fixture();
+  const receipt = await importBraintrustExperiment({ projectId, apiKey: "key" }, campaign, originals, async () => {}, receiver(campaign, originals));
+  const changed = structuredClone(campaign);
+  changed.braintrustExperiment = receipt;
+  if (kind === "source") changed.results[0]!.source!.sha = "e".repeat(40);
+  else changed.results[0]!.suiteDefinitionHash = "f".repeat(64);
+  expect(() => renderBraintrustExperiment(changed)).toThrow();
+  expect(() => buildBraintrustExperiment(projectId, changed, originals)).toThrow();
+  expect(buildBraintrustExperiment(projectId, campaign, originals).events.map(row => row.input.source_revision).sort())
+    .toEqual(["a".repeat(40), "b".repeat(40)]);
+});
+
+it("propagates a failed receipt save after successful summary lookup while retaining the accepted checkpoint", async () => {
+  const { campaign, originals } = fixture(), receipts: BraintrustExperimentReceipt[] = [];
+  await expect(importBraintrustExperiment({ projectId, apiKey: "key" }, campaign, originals, async receipt => {
+    if (receipt.experimentUrl) throw new Error("disk write failed");
+    receipts.push(receipt);
+  }, receiver(campaign, originals))).rejects.toThrow("import incomplete");
+  expect(receipts.at(-1)).toMatchObject({ status: "accepted", acceptedRows: 2 });
+  expect(receipts.at(-1)!.experimentUrl).toBeUndefined();
+});
+
+it("rejects conflicting retry receipts before overwriting saved evidence", async () => {
+  const { campaign, originals } = fixture();
+  const receipt = await importBraintrustExperiment({ projectId, apiKey: "key" }, campaign, originals, async () => {}, receiver(campaign, originals));
+  const persist = vi.fn(), transport = vi.fn<typeof fetch>();
+  await expect(importBraintrustExperiment({ projectId, apiKey: "key" }, campaign, originals, persist, transport,
+    { ...receipt, projectId: experimentId })).rejects.toThrow();
+  expect(persist).not.toHaveBeenCalled();
+  expect(transport).not.toHaveBeenCalled();
 });
 
 it.each(["public", "wrong-project", "wrong-hash", "partial-insert", "receiver-error", "oversized"])("retains safe incomplete status for %s", async kind => {

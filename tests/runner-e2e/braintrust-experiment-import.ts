@@ -36,6 +36,10 @@ if (mode === "--dry-run") {
 } else {
   const config = evalBraintrustConfig(process.env);
   if (!config) throw new Error("Braintrust project and ingestion credential required");
-  const receipt = await importBraintrustExperiment(config, campaign, originals, persist);
+  const previous = await readJson(outputFile).catch(error => {
+    if (error?.code === "ENOENT") return undefined;
+    throw error;
+  });
+  const receipt = await importBraintrustExperiment(config, campaign, originals, persist, fetch, previous);
   console.log(`Braintrust accepted ${receipt.acceptedRows} retained rows in experiment ${receipt.experimentId}; indexed verification remains required.`);
 }
