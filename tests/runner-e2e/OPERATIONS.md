@@ -219,6 +219,55 @@ provider resource limits and a verified receipt collector remain activation
 requirements. No operating-cost allowance has been configured or qualified by
 the presence of this code.
 
+Collect retained GitHub usage after the workflow completes, including failed or
+cancelled workflows, without dispatching or retrying anything:
+
+```sh
+node --import tsx tests/runner-e2e/operating-receipts.ts github RUN_ID /private/path/github-usage.json
+```
+
+The collector uses the existing `gh` authentication and only reads
+`paperclipai/paperclip`. It verifies the Product E2E workflow, first attempt,
+revision and repository, reads every returned job/artifact page up to 1,000
+records per inventory, and rejects changed or incomplete inventories. It retains
+job identities, summed job seconds, run-start delay, artifact sizes and expiration
+dates. It omits arbitrary job names, artifact names and upstream responses.
+Existing output files cannot be replaced. This is a current inventory, not an
+invoice: deleted artifacts are absent, compressed bytes are not billed
+byte-hours, job duration is not VM lifetime, and present repository visibility
+does not establish visibility throughout an earlier run. Caches and external
+S3 history remain separate. A visible public-hosted zero compute rate never
+automatically releases an overhead reservation.
+
+Import a reviewed cost receipt and its exact source evidence into an existing
+campaign's declared overhead reservation:
+
+```sh
+node --import tsx tests/runner-e2e/operating-receipts.ts import /private/path/ledger.jsonl /private/path/receipt.json /private/path/source-evidence.json
+```
+
+The receipt contains `version: 1`, `campaignId`, `allowanceReference`, `component`,
+the source file's `evidenceSha256`, `windowStartedAt`, `windowEndedAt`, `coverage`
+(`partial` or `complete`), `source` (`infrastructure` or `invoice`), `provider`,
+`classification`, and an explicit USD-string `costUsd` when known. Estimated and
+allocated charges also require a stable `pricingVersion`. `reconciled` requires
+an invoice source. An unknown amount has no `costUsd` and always remains partial.
+The observation window must have ended; completeness is the reviewer's assertion
+that this component's entire resource and billing window is represented. A
+checksum proves which file was used, not that the invoice or allocation is true.
+Shared allocations must record their numerator, denominator, window and excluded
+costs in that source file. Do not import a whole shared invoice as one campaign's
+charge without an explicit allocation method.
+
+The importer validates campaign/allowance identity and source hash, retains both
+files privately under `ledger.jsonl.overhead/`, and syncs them before appending
+the observation. Reimporting an identical receipt is a no-op. A partial amount
+keeps the rest of the allowance held. Complete invoices can supersede estimates;
+conflicting complete invoices remain visible and block admission. This command
+does not open a new spending window, change limits, dispatch tests or rewrite
+previous records. Regenerate the campaign report from the same ledger afterward;
+an old report snapshot is not rewritten by an offline receipt import.
+
 The checked pricecard expires on November 19, 2026. Admission stops when the
 pricecard expires, the catalog model changes, the project is missing, or the
 preflight already exists. Review current official prices and context limits
