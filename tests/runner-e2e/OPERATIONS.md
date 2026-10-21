@@ -176,8 +176,8 @@ agent cost. Its campaign totals still include those requests; retain that phase
 limitation when comparing setup and task spending.
 
 Attempt wall time includes setup and teardown. Agent time is the sum of captured
-heartbeat-run windows, which can overlap. Missing runtime evidence or an invalid
-run timestamp leaves agent time unknown; the report never substitutes attempt
+heartbeat-run windows, which can overlap. Missing runtime evidence, no captured
+runs or an invalid run timestamp leaves agent time unknown; the report never substitutes attempt
 wall time. A campaign total stays unknown if one of its retained attempts lacks
 that measurement. A measured zero remains zero. Missing or invalid Daytona lease
 windows likewise leave lease time and its runtime estimate unknown. Local attempts

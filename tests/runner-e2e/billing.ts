@@ -176,7 +176,9 @@ export function buildRuntimeUsage(input: {
   leases?: readonly RuntimeLeaseUsageInput[];
   fallbackFinishedAt?: string | Date;
 }): RunnerE2ERuntimeUsage {
-  const agentRunDurationMs = sumDurations(input.runs.map(run => durationBetween(run.startedAt, run.finishedAt)));
+  const agentRunDurationMs = input.runs.length > 0
+    ? sumDurations(input.runs.map(run => durationBetween(run.startedAt, run.finishedAt)))
+    : null;
   if (input.environmentId === "local") {
     return {
       provider: "local",

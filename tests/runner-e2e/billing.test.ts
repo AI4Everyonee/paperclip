@@ -34,12 +34,17 @@ describe("runner E2E billing summaries", () => {
   it("keeps missing agent time separate from attempt duration and measured zero", () => {
     const interrupted = result({ status: "failed", durationMs: 108_850 });
     expect(summarizeExecutionBilling(interrupted).runtime.agentRunDurationMs).toBeNull();
+    const noCapturedRuns = result({ ...interrupted, runIds: [],
+      runtimeUsage: buildRuntimeUsage({ environmentId: "local", runs: [] }) });
+    expect(noCapturedRuns.runtimeUsage?.agentRunDurationMs).toBeNull();
+    expect(() => validateRetainedRunnerResult(noCapturedRuns)).not.toThrow();
     const measured = result({ runtimeUsage: buildRuntimeUsage({ environmentId: "local", runs: [
       { startedAt: "2026-10-21T00:00:00Z", finishedAt: "2026-10-21T00:00:04Z" },
       { startedAt: "2026-10-21T00:00:01Z", finishedAt: "2026-10-21T00:00:05Z" },
     ] }) });
     expect(aggregateCampaignBilling([measured]).agentRunDurationMs).toBe(8000);
     expect(aggregateCampaignBilling([measured, interrupted]).agentRunDurationMs).toBeNull();
+    expect(aggregateCampaignBilling([measured, noCapturedRuns]).agentRunDurationMs).toBeNull();
     expect(durationLabel(aggregateCampaignBilling([measured, interrupted]).agentRunDurationMs)).toBe("Unknown");
     const zero = buildRuntimeUsage({ environmentId: "local", runs: [
       { startedAt: "2026-10-21T00:00:00Z", finishedAt: "2026-10-21T00:00:00Z" },
