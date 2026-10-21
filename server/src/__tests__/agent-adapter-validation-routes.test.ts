@@ -722,7 +722,7 @@ describe("agent routes adapter validation", () => {
       const app = await createApp();
       const res = await requestApp(app, baseUrl => request(baseUrl)
         .post("/api/companies/company-1/adapters/paperclip_runner/test-environment")
-        .send({ agentId: "11111111-1111-4111-8111-111111111111", adapterConfig: { provider: "acpx", acpxAgent: "pi" } }));
+        .send({ agentId: "11111111-1111-4111-8111-111111111111", adapterConfig: { provider: "acpx", acpxAgent: "grok" } }));
       expect(res.status, JSON.stringify(res.body)).toBe(422);
       expect(res.body.details).toMatchObject({ code: "paperclip_runner_rollout_disabled" });
       expect(probe).not.toHaveBeenCalled();
@@ -793,9 +793,65 @@ describe("agent routes adapter validation", () => {
     expect(mockAgentService.create).not.toHaveBeenCalled();
   });
 
+  it.each(["auto", "legacy"] as const)("creates Pi through the public route with %s selection and the experimental flag off", async runner => {
+    const selection = await import("../services/agent-runner-selection.js");
+    vi.spyOn(selection, "resolveNewAgentRunnerForCompany").mockImplementation(async (_db, _companyId, input) =>
+      selection.resolveNewAgentRunner({ ...input, target: { driver: "local", platform: "darwin", architecture: "arm64" } }));
+    const app = await createApp();
+    const model = "openrouter/anthropic/claude-sonnet-4.6";
+    const response = await requestApp(app, baseUrl => request(baseUrl).post("/api/companies/company-1/agents").send({ name: "Pi", adapterType: "pi_local", runner, adapterConfig: { model } }));
+    expect(response.status, JSON.stringify(response.body)).toBe(201);
+    expect(mockAgentService.create.mock.calls.at(-1)?.[1]).toMatchObject({ adapterType: runner === "legacy" ? "pi_local" : "paperclip_runner", adapterConfig: runner === "legacy" ? { model } : { provider: "acpx", acpxAgent: "pi", model, piThinkingLevel: "low", acpxPermissionMode: "approve-all" } });
+  });
+
+  it("allows model-free Pi only as an inactive setup draft", async () => {
+    const selection = await import("../services/agent-runner-selection.js");
+    vi.spyOn(selection, "resolveNewAgentRunnerForCompany").mockImplementation(async (_db, _companyId, input) =>
+      selection.resolveNewAgentRunner({ ...input, target: { driver: "local", platform: "darwin", architecture: "arm64" } }));
+    const originalCreate = mockAgentService.create.getMockImplementation()!;
+    mockAgentService.create.mockImplementation(async (...args) => ({ ...await originalCreate(...args), lifecycleHolds: ["setup"] }));
+    const app = await createApp();
+    const input = { name: "Pi draft", adapterType: "pi_local", adapterConfig: {} };
+    const draft = await requestApp(app, baseUrl => request(baseUrl).post("/api/companies/company-1/agents")
+      .send({ ...input, setupId: "00000000-0000-4000-8000-000000000092" }));
+    expect(draft.status, JSON.stringify(draft.body)).toBe(201);
+    expect(mockAgentService.create.mock.calls.at(-1)?.[1]).toMatchObject({ adapterType: "paperclip_runner", adapterConfig: { provider: "acpx", acpxAgent: "pi", model: "" } });
+    expect(mockAgentService.create.mock.calls.at(-1)?.[2]).toMatchObject({ setupOnly: true, runnerResolved: true });
+    mockAgentService.create.mockClear();
+    const active = await requestApp(app, baseUrl => request(baseUrl).post("/api/companies/company-1/agents")
+      .send({ ...input, setupOnly: true }));
+    expect(active.status).toBe(422);
+    expect(mockAgentService.create).not.toHaveBeenCalled();
+  });
+
+  it("keeps Pi model selection empty when a provisional setup record changes harness", async () => {
+    const selection = await import("../services/agent-runner-selection.js");
+    vi.spyOn(selection, "resolveNewAgentRunnerForCompany").mockImplementation(async (_db, _companyId, input) =>
+      selection.resolveNewAgentRunner({ ...input, target: { driver: "local", platform: "darwin", architecture: "arm64" } }));
+    mockAgentService.getById.mockResolvedValue({ ...(await mockAgentService.getById()), adapterType: "process", adapterConfig: {}, status: "paused", lifecycleState: "paused", pauseReason: "setup", lifecycleHolds: ["setup"] });
+    const app = await createApp();
+    const response = await requestApp(app, baseUrl => request(baseUrl).patch("/api/agents/11111111-1111-4111-8111-111111111111")
+      .send({ adapterType: "pi_local", runner: "auto", adapterConfig: {} }));
+    expect(response.status, JSON.stringify(response.body)).toBe(200);
+    expect(mockAgentService.update.mock.calls.at(-1)?.[1]).toMatchObject({ adapterType: "paperclip_runner", adapterConfig: { provider: "acpx", acpxAgent: "pi", model: "" } });
+  });
+
+  it.each([{ thinking: "high", status: 200 }, { thinking: "medium", status: 422 }, { command: "custom-pi", status: 422 }])("validates saved Pi settings during direct adapter conversion: %j", async ({ status, ...settings }) => {
+    const selection = await import("../services/agent-runner-selection.js");
+    vi.spyOn(selection, "resolveNewAgentRunnerForCompany").mockImplementation(async (_db, _companyId, input) =>
+      selection.resolveNewAgentRunner({ ...input, target: { driver: "local", platform: "darwin", architecture: "arm64" } }));
+    mockAgentService.getById.mockResolvedValue({ ...(await mockAgentService.getById()), adapterType: "pi_local", adapterConfig: { model: "openrouter/anthropic/claude-sonnet-4.5", ...settings } });
+    const app = await createApp();
+    const response = await requestApp(app, baseUrl => request(baseUrl).patch("/api/agents/11111111-1111-4111-8111-111111111111")
+      .send({ adapterType: "paperclip_runner", adapterConfig: {} }));
+    expect(response.status, JSON.stringify(response.body)).toBe(status);
+    if (status === 200) expect(mockAgentService.update.mock.calls.at(-1)?.[1]).toMatchObject({ adapterType: "paperclip_runner", adapterConfig: { acpxAgent: "pi", model: "openrouter/anthropic/claude-sonnet-4.5", piThinkingLevel: "high" } });
+    else expect(mockAgentService.update).not.toHaveBeenCalled();
+  });
+
   it("keeps other native provider selection behind its existing flag", async () => {
     const app = await createApp();
-    const response = await requestApp(app, baseUrl => request(baseUrl).post("/api/companies/company-1/agents").send({ name: "Native Pi", adapterType: "paperclip_runner", adapterConfig: { provider: "acpx", acpxAgent: "pi", model: "openrouter/deepseek/deepseek-v4-flash-0731" } }));
+    const response = await requestApp(app, baseUrl => request(baseUrl).post("/api/companies/company-1/agents").send({ name: "Native Grok", adapterType: "paperclip_runner", adapterConfig: { provider: "acpx", acpxAgent: "grok", model: "openrouter/deepseek/deepseek-v4-flash-0731" } }));
     expect(response.status).toBe(422);
     expect(response.body.details).toMatchObject({ code: "paperclip_runner_rollout_disabled" });
   });
