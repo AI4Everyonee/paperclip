@@ -74,6 +74,54 @@ beforeAll(async () => {
 afterAll(async () => { await database?.cleanup(); vi.unstubAllEnvs(); if (home) await rm(home, { recursive: true, force: true }); });
 
 describe("managed AI connections", () => {
+  it.each([
+    { provider: "openrouter", envKey: "OPENROUTER_API_KEY", routed: false },
+    { provider: "openrouter", envKey: "OPENROUTER_API_KEY", routed: true },
+    { provider: "openai", envKey: "OPENAI_API_KEY", routed: false },
+    { provider: "anthropic", envKey: "ANTHROPIC_API_KEY", routed: false },
+    { provider: "google", envKey: "GEMINI_API_KEY", routed: false },
+  ] as const)("prepares native Pi with isolated $provider credentials (routing=$routed)", async ({ provider, envKey, routed }) => {
+    const owner = `pi-managed-${provider}-${routed}`;
+    await db.insert(companyMemberships).values({ companyId, principalId: owner, principalType: "user", status: "active", membershipRole: "member" });
+    const token = "fixture-pi-provider-key";
+    const account = await service.save(companyId, owner, { provider, method: "api_key", ownership: "personal", name: owner, apiKey: token, allAgents: true, agentIds: [],
+      ...(routed ? { routing: { kind: "openrouter" as const, protocol: "chat" as const, auth: "bearer" as const, models: [] } } : {}) }, token);
+    if (!routed) await service.setDefault(companyId, owner, account.grantId);
+    const selected = routed
+      ? { provider, method: "api_key" as const, mode: "delegated" as const, ...account }
+      : { provider, method: "api_key" as const, mode: "responsible_user" as const };
+    const piInput = { companyId, agentId, responsibleUserId: owner, adapterType: "paperclip_runner", binding: selected,
+      config: { provider: "acpx", acpxAgent: "pi", model: `${provider}/provider-model`, piThinkingLevel: "low", env: { OPENAI_API_KEY: "stale-openai", ANTHROPIC_API_KEY: "stale-anthropic" } } };
+    const runtime = await prepareManagedAiRuntime(db, piInput);
+    try {
+      expect(runtime.config).toMatchObject({ provider: "acpx", acpxAgent: "pi", model: piInput.config.model, env: { OPENCODE_CONFIG_CONTENT: "", PAPERCLIP_PI_PROVIDERS: "" } });
+      for (const key of ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY", "CODEX_API_KEY"]) expect(runtime.config.env[key]).toBe(key === envKey ? token : "");
+      expect(runtime.attribution).toMatchObject({ connectionId: account.connectionId, grantId: account.grantId, provider });
+    } finally { await runtime.cleanup(); }
+    await expect(prepareManagedAiRuntime(db, { ...piInput, config: { ...piInput.config, env: { PAPERCLIP_PI_PROVIDERS: "{}" } } })).rejects.toThrow("routing is incompatible");
+  });
+
+  it.each([200, 401])("reverifies native Pi OpenRouter keys without requiring the Legacy Pi CLI (HTTP %s)", async status => {
+    const owner = `pi-adoption-${status}`;
+    await db.insert(companyMemberships).values({ companyId, principalId: owner, principalType: "user", status: "active", membershipRole: "member" });
+    const token = `fixture-pi-adoption-${status}`;
+    const account = await service.save(companyId, owner, { provider: "openrouter", method: "api_key", ownership: "personal", name: owner, apiKey: token, allAgents: true, agentIds: [], routing: { kind: "openrouter", protocol: "chat", auth: "bearer", models: [] } }, token);
+    const selected = { provider: "openrouter", method: "api_key", mode: "delegated", ...account } as const;
+    const runtime = await prepareManagedAiRuntime(db, { companyId, agentId, responsibleUserId: owner, adapterType: "paperclip_runner", binding: selected, config: { provider: "acpx", acpxAgent: "pi", model: "openrouter/anthropic/claude-sonnet-4.5" } });
+    const { requireServerAdapter } = await import("../adapters/index.js");
+    const { agentEnvironmentTestService } = await import("../services/agent-environment-test.js");
+    const native = vi.spyOn(requireServerAdapter("paperclip_runner"), "testEnvironment").mockResolvedValue({ adapterType: "paperclip_runner", status: "pass", testedAt: new Date().toISOString(), checks: [{ code: "acpx_runtime_ready", level: "info", message: "Pinned Pi runtime verified" }] });
+    const legacy = vi.spyOn(requireServerAdapter("pi_local"), "testEnvironment").mockRejectedValue(new Error("Legacy Pi CLI must not be required"));
+    const request = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ data: {} }), { status }));
+    try {
+      const result = await agentEnvironmentTestService(db).testManagedEnvironment("paperclip_runner", { companyId, adapterType: "paperclip_runner", config: runtime.config }, selected, runtime, agentId);
+      expect(result.status).toBe(status === 200 ? "pass" : "fail");
+      expect(result.checks).toContainEqual(expect.objectContaining({ code: status === 200 ? "ai_connection_api_key_reverified" : "ai_connection_api_key_rejected" }));
+      expect(legacy).not.toHaveBeenCalled();
+      expect(request).toHaveBeenCalled();
+    } finally { native.mockRestore(); legacy.mockRestore(); request.mockRestore(); await runtime.cleanup(); }
+  });
+
   it("defers a new plugin agent's Copilot check until its saved-agent lifecycle can acquire the computer", async () => {
     const { errorHandler } = await import("../middleware/index.js");
     const owner = "copilot-plugin-bootstrap", pluginId = randomUUID();
