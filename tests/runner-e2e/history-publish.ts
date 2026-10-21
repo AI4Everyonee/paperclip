@@ -24,6 +24,7 @@ import { regenerateRunnerDashboard } from "./dashboard-regenerate.js";
 import { renderRunnerHistoryIndex } from "./history-index.js";
 import { validateHistoryDestination } from "./history-destination.js";
 import { PUBLIC_RUNNER_SCREENSHOT_MARKER } from "./screenshot-policy.js";
+import { BoundedHistoryPublisher, checkHistoryPayload, HISTORY_LIMITS } from "./history-budget.js";
 import {
   campaignHistoryRecord,
   emptyRunnerHistory,
@@ -272,10 +273,12 @@ async function relativeFiles(
   current = root,
   allowPublicSummary = false,
   publicScreenshots: ReadonlySet<string> = EMPTY_PUBLIC_SCREENSHOTS,
+  boundary?: { entries: number },
 ): Promise<string[]> {
   const entries = await readdir(current, { withFileTypes: true });
   const files: string[] = [];
   for (const entry of entries) {
+    if (boundary && ++boundary.entries > 1024) throw new Error("Public bundle exceeds the directory-entry boundary");
     const absolute = path.join(current, entry.name);
     if (entry.isSymbolicLink()) {
       throw new Error(`Refusing to publish symbolic link ${entry.name}`);
@@ -287,6 +290,7 @@ async function relativeFiles(
           absolute,
           allowPublicSummary,
           publicScreenshots,
+          boundary,
         )),
       );
     } else if (entry.isFile()) {
@@ -314,11 +318,17 @@ export async function createBundleManifest(
   campaignId: string,
   allowPublicSummary = false,
   publicScreenshots: ReadonlySet<string> = EMPTY_PUBLIC_SCREENSHOTS,
+  bounded = false,
 ): Promise<BundleManifest> {
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/.test(campaignId)) {
     throw new Error("Campaign ID is unsafe for immutable object storage");
   }
-  const retainedPaths = await relativeFiles(root, root, allowPublicSummary, publicScreenshots);
+  const retainedPaths = await relativeFiles(root, root, allowPublicSummary, publicScreenshots, bounded ? { entries: 0 } : undefined);
+  if (bounded) {
+    checkHistoryPayload(await Promise.all(retainedPaths.map(async file => ({
+      path: file, bytes: (await stat(path.join(root, file))).size,
+    }))), HISTORY_LIMITS.campaignBytes, HISTORY_LIMITS.campaignFiles, "Public campaign");
+  }
   const retained = new Set(retainedPaths);
   const missingScreenshots = [...publicScreenshots].filter((relative) => !retained.has(relative));
   if (missingScreenshots.length > 0) {
@@ -426,7 +436,9 @@ async function downloadJson<T>(
   bucket: string,
   key: string,
   destination: string,
+  bounded?: BoundedHistoryPublisher,
 ) {
+  if (bounded) return bounded.downloadJson<T>(bucket, key, destination);
   if (!(await objectExists(bucket, key))) return null;
   await execFileAsync("aws", [
     "s3",
@@ -471,7 +483,20 @@ async function uploadImmutableBundle(
   bucket: string,
   key: string,
   directory: string,
+  manifest?: BundleManifest,
+  bounded?: BoundedHistoryPublisher,
 ) {
+  if (bounded && manifest) {
+    for (const file of manifest.files) {
+      const extension = path.extname(file.path);
+      const contentType = ({ ".png": "image/png", ".json": "application/json", ".html": "text/html; charset=utf-8",
+        ".woff2": "font/woff2", ".xml": "application/xml", ".md": "text/plain; charset=utf-8" } as Record<string, string>)[extension];
+      if (!contentType) throw new Error(`Missing public content type for ${file.path}`);
+      await bounded.upload(bucket, `${key}/${file.path}`, path.join(directory, file.path), contentType,
+        "public,max-age=2592000,immutable", true);
+    }
+    return;
+  }
   const common = [
     "--recursive",
     "--only-show-errors",
@@ -519,6 +544,12 @@ async function main() {
     prefix: process.env.RUNNER_E2E_HISTORY_PREFIX ?? "runner-e2e",
     publicBaseUrl: process.env.RUNNER_E2E_HISTORY_PUBLIC_BASE_URL ?? "",
   });
+  const bounded = process.env.PAPERCLIP_E2E_BOUNDED_HISTORY === "true";
+  if (bounded && process.env.GITHUB_ACTIONS === "true" && process.env.GITHUB_RUN_ATTEMPT !== "1") {
+    throw new Error("Bounded history publication requires the original workflow attempt; retain failed publication evidence");
+  }
+  const publisher = bounded ? new BoundedHistoryPublisher(path.join(path.dirname(reportRoot), "history-publication-receipt.json")) : undefined;
+  if (publisher) await publisher.verifyRetention(bucket, destination.prefix);
   const campaign = JSON.parse(
     await readFile(path.join(reportRoot, "normalized-results.json"), "utf8"),
   ) as RunnerE2ECampaign;
@@ -539,6 +570,7 @@ async function main() {
       bucket,
       historyKey,
       path.join(temporary, "current-history.json"),
+      publisher,
     )) ?? emptyRunnerHistory();
   const history = mergeRunnerHistory(
     current,
@@ -546,7 +578,11 @@ async function main() {
       campaign,
       `${destination.publicBaseUrl}/${destination.prefix}`,
     ),
+    bounded ? { now: Date.now(), maxAgeMs: HISTORY_LIMITS.indexDays * 86_400_000, maxCampaigns: HISTORY_LIMITS.indexCampaigns } : undefined,
   );
+  if (bounded && !history.campaigns.some(entry => entry.campaignId === campaign.campaignId)) {
+    throw new Error("Bounded campaign is outside the retained history window");
+  }
   const publicScreenshots = publicScreenshotPaths(campaign);
 
   // Campaign bundles are immutable and must not capture a mutable history
@@ -578,6 +614,7 @@ async function main() {
     campaign.campaignId,
     true,
     publicScreenshots,
+    bounded,
   );
   const campaignPrefix = `${destination.prefix}/campaigns/${campaign.campaignId}`;
   const manifestKey = `${campaignPrefix}/bundle-manifest.json`;
@@ -585,6 +622,7 @@ async function main() {
     bucket,
     manifestKey,
     path.join(temporary, "existing-manifest.json"),
+    publisher,
   );
   if (
     existingManifest &&
@@ -594,17 +632,8 @@ async function main() {
       `Immutable campaign ${campaign.campaignId} already exists with a different digest`,
     );
   }
-  if (!existingManifest) {
-    await uploadImmutableBundle(bucket, campaignPrefix, s3ReportRoot);
-    const manifestFile = path.join(temporary, "bundle-manifest.json");
-    await writeFile(manifestFile, json(manifest), "utf8");
-    await uploadJson(
-      bucket,
-      manifestKey,
-      manifestFile,
-      "public,max-age=31536000,immutable",
-    );
-  }
+  const manifestFile = path.join(temporary, "bundle-manifest.json");
+  await writeFile(manifestFile, json(manifest), "utf8");
 
   // Pages uses the same declared-screenshot boundary in a sibling stage. The
   // downloaded access-controlled report stays intact for this whole job.
@@ -627,11 +656,12 @@ async function main() {
     writeFile(latestGreenFile, json(pointers.latestGreen), "utf8"),
   ]);
   await regenerateRunnerDashboard({ bundle: pagesRoot, historyFile });
-  await createBundleManifest(
+  const pagesManifest = await createBundleManifest(
     pagesRoot,
     campaign.campaignId,
     false,
     publicScreenshots,
+    bounded,
   );
   const landingDirectory = path.join(temporary, "landing");
   await regenerateRunnerDashboard({
@@ -645,6 +675,37 @@ async function main() {
     renderRunnerHistoryIndex(history),
     "utf8",
   );
+  if (publisher) {
+    const mutableFiles = [
+      { key: historyKey, file: historyFile, contentType: "application/json" },
+      { key: `${destination.prefix}/latest.json`, file: latestFile, contentType: "application/json" },
+      { key: `${destination.prefix}/latest-green.json`, file: latestGreenFile, contentType: "application/json" },
+      ...["index.html", "dashboard.html", "normalized-results.json"].map(file => ({ key: `${destination.prefix}/${file}`,
+        file: path.join(landingDirectory, file), contentType: file.endsWith("json") ? "application/json" : "text/html; charset=utf-8" })),
+      ...["favicon-32x32.png", "InterVariable.woff2"].map(file => ({ key: `${destination.prefix}/assets/${file}`,
+        file: path.join(s3ReportRoot, "assets", file), contentType: file.endsWith("png") ? "image/png" : "font/woff2" })),
+    ];
+    const metadata = async (file: string) => ({ path: file, bytes: (await stat(file)).size });
+    const campaignSize = checkHistoryPayload([...manifest.files, await metadata(manifestFile)],
+      HISTORY_LIMITS.campaignBytes, HISTORY_LIMITS.campaignFiles, "Public campaign with manifest");
+    const mutableMetadata = await Promise.all(mutableFiles.map(file => metadata(file.file)));
+    const mutableSize = checkHistoryPayload(mutableMetadata, HISTORY_LIMITS.mutableBytes, 8, "Mutable history");
+    const pointerMetadata = await Promise.all([historyFile, latestFile, latestGreenFile].map(metadata));
+    checkHistoryPayload(pointerMetadata, HISTORY_LIMITS.jsonBytes, 3, "History JSON");
+    const pagesSize = checkHistoryPayload([...pagesManifest.files, ...pointerMetadata],
+      HISTORY_LIMITS.pagesBytes, HISTORY_LIMITS.campaignFiles + 3, "Pages bundle");
+    if (!existingManifest) {
+      await uploadImmutableBundle(bucket, campaignPrefix, s3ReportRoot, manifest, publisher);
+      await publisher.upload(bucket, manifestKey, manifestFile, "application/json", "public,max-age=2592000,immutable", true);
+    }
+    for (const file of mutableFiles) await publisher.upload(bucket, file.key, file.file, file.contentType, "no-cache");
+    console.log(JSON.stringify({ campaign: campaignSize, mutable: mutableSize, pages: pagesSize, billedUsd: null }));
+    return;
+  }
+  if (!existingManifest) {
+    await uploadImmutableBundle(bucket, campaignPrefix, s3ReportRoot);
+    await uploadJson(bucket, manifestKey, manifestFile, "public,max-age=31536000,immutable");
+  }
   await Promise.all([
     uploadJson(bucket, historyKey, historyFile, "no-cache"),
     uploadJson(

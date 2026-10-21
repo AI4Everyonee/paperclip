@@ -43,8 +43,42 @@ scope and does not fail retention. Other hidden paths make the scope incomplete.
 Skipped paths and unvisited subtrees are named; overlong names use a bounded preview
 and full-path digest. Partial staging is uploaded before the workflow
 fails, so a storage limit cannot silently turn missing evidence into success.
-These upload limits do not cap runtime disk writes, Actions caches, public S3
-history or Pages. Those resources still need their own operating-cost evidence.
+These upload limits do not cap runtime disk writes or Actions caches. Public
+history has the separate boundaries below. Each service still needs billing evidence.
+
+### Public history retention
+
+Bounded campaigns publish below `<history-prefix>/bounded-v1/`. The existing
+manual history remains at its original prefix. Both report links and the trusted
+publisher use this isolated destination. Publication is limited to the original
+CI workflow attempt; a failed publisher retains its receipt and is not retried
+under the same allowance.
+
+Before any upload, the publisher validates all outgoing bundles: at most 64 MiB
+and 256 files for the immutable campaign including its manifest, 16 MiB and eight
+files for mutable history, and 64 MiB for the Pages bundle. History JSON reads
+are limited to 4 MiB. The active index keeps at most 64 campaigns from the last
+28 days and rebuilds latest/green pointers from those records. If publication
+stops, the static index can retain links that later expire.
+
+The bucket must have versioning enabled and exact prefix lifecycle rules for
+30-day current-version expiration, one-day noncurrent-version expiration without
+a retained-version floor, expired delete-marker removal and one-day incomplete
+multipart cleanup. The publisher rejects overlapping transitions, different
+expiration policies, Object Lock and replication. Access denied is a failure,
+not proof that a feature is absent. Its role needs `s3:GetBucketVersioning`,
+`s3:GetLifecycleConfiguration`, `s3:GetBucketObjectLockConfiguration` and
+`s3:GetReplicationConfiguration` on that bucket. Configuration is verified at
+each publication; it cannot guarantee that an operator will preserve it afterward.
+
+The publisher admits at most 280 S3 CLI commands over ten minutes, with a
+30-second command timeout and automatic AWS retries disabled. Uploads use
+single `PutObject` operations in STANDARD storage; immutable objects use
+`If-None-Match`. A private receipt is synced before each command and retained
+as an Actions artifact. Unknown responses remain unknown. Source bytes, S3
+commands and expiration eligibility are not invoices or exact deletion times.
+Credential lookup, public downloads/CDN egress, Pages hosting and shared service
+charges require separate accounting; these limits do not cap public traffic.
 
 The launcher owns one loopback HTTP gateway per attempt. The real provider key
 stays in the parent launcher. Playwright receives an ephemeral token, and fixture

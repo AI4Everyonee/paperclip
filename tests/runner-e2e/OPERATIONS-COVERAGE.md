@@ -107,6 +107,12 @@ control, not a provider billing cap. Actual resource bounds, cost collection and
 reviewed allowances still need qualification before recurrence is enabled; see
 [the allowance contract](OPERATIONS.md#recurring-campaigns).
 
+Bounded public history now has an isolated prefix, file/byte/request boundaries,
+retained publication receipts and verified current/noncurrent expiration rules;
+see [public history retention](OPERATIONS.md#public-history-retention). These
+controls bound one publisher invocation and its stored payload. They do not
+establish an exact campaign storage invoice or cap public CDN traffic.
+
 ## Separate Runner Eval audit
 
 The October 21 audit inspected Paperclip source on master `8b873e0112` plus the

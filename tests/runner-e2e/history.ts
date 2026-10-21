@@ -287,6 +287,7 @@ export function emptyRunnerHistory(): RunnerE2EHistoryIndex {
 export function mergeRunnerHistory(
   current: RunnerE2EHistoryIndex | null | undefined,
   campaign: RunnerE2EHistoryCampaign,
+  retention?: { now: number; maxAgeMs: number; maxCampaigns: number },
 ): RunnerE2EHistoryIndex {
   const base =
     current?.schema === "paperclip.runner-e2e.history/v1"
@@ -297,10 +298,14 @@ export function mergeRunnerHistory(
     ...base.campaigns.filter(
       (candidate) => candidate.campaignId !== campaign.campaignId,
     ),
-  ].sort(
+  ].filter(candidate => !retention || (
+    Number.isFinite(Date.parse(candidate.generatedAt)) &&
+    Date.parse(candidate.generatedAt) > retention.now - retention.maxAgeMs &&
+    Date.parse(candidate.generatedAt) <= retention.now + 60_000
+  )).sort(
     (left, right) =>
       Date.parse(right.generatedAt) - Date.parse(left.generatedAt),
-  );
+  ).slice(0, retention?.maxCampaigns);
   const latestBySuite: Record<string, string> = {};
   const latestGreenBySuite: Record<string, string> = {};
   for (const candidate of campaigns) {
@@ -313,7 +318,7 @@ export function mergeRunnerHistory(
   }
   return {
     schema: "paperclip.runner-e2e.history/v1",
-    updatedAt: new Date().toISOString(),
+    updatedAt: new Date(retention?.now ?? Date.now()).toISOString(),
     latestCampaignId: campaigns[0]?.campaignId ?? null,
     latestGreenCampaignId:
       campaigns.find(

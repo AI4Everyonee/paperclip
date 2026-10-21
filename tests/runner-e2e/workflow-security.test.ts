@@ -777,9 +777,10 @@ describe("public repository paid workflow security", () => {
     expect(report).toContain(
       "PAPERCLIP_RUNNER_E2E_HISTORY_PUBLIC_BASE_URL: ${{ vars.RUNNER_E2E_HISTORY_PUBLIC_BASE_URL }}",
     );
-    expect(report).toContain(
-      "PAPERCLIP_RUNNER_E2E_HISTORY_PREFIX: ${{ vars.RUNNER_E2E_HISTORY_PREFIX || 'runner-e2e' }}",
-    );
+    const historyPrefix = "${{ needs.catalog.outputs.operations_cadence != '' && format('{0}/bounded-v1', vars.RUNNER_E2E_HISTORY_PREFIX || 'runner-e2e') || vars.RUNNER_E2E_HISTORY_PREFIX || 'runner-e2e' }}";
+    expect(report).toContain(`PAPERCLIP_RUNNER_E2E_HISTORY_PREFIX: ${historyPrefix}`);
+    expect(publisher).toContain(`RUNNER_E2E_HISTORY_PREFIX: ${historyPrefix}`);
+    expect(publisher).toContain("PAPERCLIP_E2E_BOUNDED_HISTORY: ${{ needs.catalog.outputs.operations_cadence != '' && 'true' || 'false' }}");
     expect(
       report.indexOf("Select latest workflow attempt per cell"),
     ).toBeLessThan(report.indexOf("Collect blob reports"));
