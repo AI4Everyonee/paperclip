@@ -84,7 +84,7 @@ const relativeFile: Rule = (value, at) => {
 };
 const runtime = shape({
   provider: oneOf("local", "daytona"),
-  agentRunDurationMs: number,
+  agentRunDurationMs: nullable(number),
   leaseDurationMs: nullable(number),
   leaseCount: integer,
   cpuCores: optional(number),

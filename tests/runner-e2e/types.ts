@@ -240,7 +240,7 @@ export type RunnerE2ECostStatus =
 export interface RunnerE2ERuntimeUsage {
   provider: RunnerEnvironmentId;
   /** Sum of the selected Paperclip heartbeat-run spans. */
-  agentRunDurationMs: number;
+  agentRunDurationMs: number | null;
   /** Sum of provider lease windows when the environment exposes leases. */
   leaseDurationMs: number | null;
   leaseCount: number;
@@ -386,8 +386,8 @@ export interface RunnerE2EAggregateBillingSummary {
   assistant?: { requests: number; inputTokens: number; outputTokens: number; cachedInputTokens: number; estimatedCostUsd: number };
   judge?: RunnerE2EJudgeBillingSummary;
   testCount: number;
-  agentRunDurationMs: number;
-  leaseDurationMs: number;
+  agentRunDurationMs: number | null;
+  leaseDurationMs: number | null;
   llm: RunnerE2EBillingSummary["llm"];
   reportedLlmCostUsd: number;
   estimatedLlmCostUsd?: number;

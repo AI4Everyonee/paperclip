@@ -16,7 +16,8 @@ export function html(value: unknown) {
     .replaceAll("'", "&#39;");
 }
 
-export function durationLabel(durationMs: number) {
+export function durationLabel(durationMs: number | null) {
+  if (durationMs === null) return "Unknown";
   if (durationMs < 1_000) return `${durationMs}ms`;
   const seconds = Math.round(durationMs / 1_000);
   if (seconds < 60) return `${seconds}s`;

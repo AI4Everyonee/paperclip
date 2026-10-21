@@ -32,8 +32,8 @@ export interface CampaignBillingSummary {
   assistant?: import("./types.js").RunnerE2EAggregateBillingSummary["assistant"];
   judge?: import("./types.js").RunnerE2EJudgeBillingSummary;
   testCount: number;
-  agentRunDurationMs: number;
-  leaseDurationMs: number;
+  agentRunDurationMs: number | null;
+  leaseDurationMs: number | null;
   llm: RunnerE2EBillingSummary["llm"];
   reportedLlmCostUsd: number;
   estimatedLlmCostUsd?: number;
@@ -154,9 +154,13 @@ function durationBetween(
 ) {
   const started = startedAt ? new Date(startedAt).getTime() : Number.NaN;
   const finished = finishedAt ? new Date(finishedAt).getTime() : Number.NaN;
-  return Number.isFinite(started) && Number.isFinite(finished)
-    ? Math.max(0, finished - started)
-    : 0;
+  return Number.isFinite(started) && Number.isFinite(finished) && finished >= started
+    ? finished - started
+    : null;
+}
+
+function sumDurations(values: readonly (number | null)[]): number | null {
+  return values.some(value => value === null) ? null : values.reduce<number>((total, value) => total + value!, 0);
 }
 
 function resourceValue(
@@ -172,10 +176,7 @@ export function buildRuntimeUsage(input: {
   leases?: readonly RuntimeLeaseUsageInput[];
   fallbackFinishedAt?: string | Date;
 }): RunnerE2ERuntimeUsage {
-  const agentRunDurationMs = input.runs.reduce(
-    (total, run) => total + durationBetween(run.startedAt, run.finishedAt),
-    0,
-  );
+  const agentRunDurationMs = sumDurations(input.runs.map(run => durationBetween(run.startedAt, run.finishedAt)));
   if (input.environmentId === "local") {
     return {
       provider: "local",
@@ -189,6 +190,7 @@ export function buildRuntimeUsage(input: {
 
   const leases = input.leases ?? [];
   let leaseDurationMs = 0;
+  let leaseDurationsComplete = leases.length > 0;
   let estimatedListCostUsd = 0;
   let resourcesComplete = leases.length > 0;
   const resourceRows: Array<{ cpu: number; memory: number; disk: number }> = [];
@@ -196,6 +198,11 @@ export function buildRuntimeUsage(input: {
     const finishedAt =
       lease.releasedAt ?? input.fallbackFinishedAt ?? lease.updatedAt ?? null;
     const durationMs = durationBetween(lease.acquiredAt, finishedAt);
+    if (durationMs === null) {
+      leaseDurationsComplete = false;
+      resourcesComplete = false;
+      continue;
+    }
     leaseDurationMs += durationMs;
     const cpu = resourceValue(lease.metadata, "cpu");
     const memory = resourceValue(lease.metadata, "memory");
@@ -219,7 +226,7 @@ export function buildRuntimeUsage(input: {
   return {
     provider: "daytona",
     agentRunDurationMs,
-    leaseDurationMs: leases.length > 0 ? leaseDurationMs : null,
+    leaseDurationMs: leaseDurationsComplete ? leaseDurationMs : null,
     leaseCount: leases.length,
     ...(commonResource("cpu") === undefined
       ? {}
@@ -253,7 +260,7 @@ export function fallbackRuntimeUsage(
   if (result.runtimeUsage) return result.runtimeUsage;
   return {
     provider: result.environmentId,
-    agentRunDurationMs: result.durationMs,
+    agentRunDurationMs: null,
     leaseDurationMs: null,
     leaseCount: 0,
     costStatus:
@@ -412,14 +419,9 @@ export function aggregateBillingSummaries(
       attemptsWithUnknownUsage: judges.filter(q => q.estimatedCostUsd === null).length,
     } } : {}),
     testCount: executionIds.length,
-    agentRunDurationMs: summaries.reduce(
-      (total, summary) => total + summary.runtime.agentRunDurationMs,
-      0,
-    ),
-    leaseDurationMs: summaries.reduce(
-      (total, summary) => total + (summary.runtime.leaseDurationMs ?? 0),
-      0,
-    ),
+    agentRunDurationMs: sumDurations(summaries.map(summary => summary.runtime.agentRunDurationMs)),
+    leaseDurationMs: sumDurations(summaries.filter(summary => summary.runtime.provider === "daytona")
+      .map(summary => summary.runtime.leaseDurationMs)),
     llm: {
       runCount,
       runsWithTokenUsage,

@@ -44,6 +44,9 @@ describe("runner E2E report aggregation", () => {
     const normalized = JSON.parse(await readFile(path.join(output, "normalized-results.json"), "utf8"));
     expect(normalized).toMatchObject({ passed: 1, failed: 0, operations: { status: "unavailable" } });
     expect(normalized.results[0]).toMatchObject({ executionId, status: "passed" });
+    expect(normalized.billing.agentRunDurationMs).toBeNull();
+    expect(await readFile(path.join(output, "index.html"), "utf8"))
+      .toContain("<strong>Unknown</strong><span>Agent execution time</span>");
     for (const file of ["index.html", "summary.md"]) {
       expect(await readFile(path.join(output, file), "utf8")).toContain("Request ledger accounting unavailable");
     }

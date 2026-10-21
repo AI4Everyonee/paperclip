@@ -6,7 +6,8 @@ import {
   summarizeExecutionBilling,
 } from "./billing.js";
 import type { RunnerE2EResult } from "./types.js";
-import { llmCostLabel } from "./report-format.js";
+import { durationLabel, llmCostLabel } from "./report-format.js";
+import { validateRetainedRunnerResult } from "./result-validation.js";
 
 function result(overrides: Partial<RunnerE2EResult> = {}): RunnerE2EResult {
   return {
@@ -30,6 +31,37 @@ function result(overrides: Partial<RunnerE2EResult> = {}): RunnerE2EResult {
 }
 
 describe("runner E2E billing summaries", () => {
+  it("keeps missing agent time separate from attempt duration and measured zero", () => {
+    const interrupted = result({ status: "failed", durationMs: 108_850 });
+    expect(summarizeExecutionBilling(interrupted).runtime.agentRunDurationMs).toBeNull();
+    const measured = result({ runtimeUsage: buildRuntimeUsage({ environmentId: "local", runs: [
+      { startedAt: "2026-10-21T00:00:00Z", finishedAt: "2026-10-21T00:00:04Z" },
+      { startedAt: "2026-10-21T00:00:01Z", finishedAt: "2026-10-21T00:00:05Z" },
+    ] }) });
+    expect(aggregateCampaignBilling([measured]).agentRunDurationMs).toBe(8000);
+    expect(aggregateCampaignBilling([measured, interrupted]).agentRunDurationMs).toBeNull();
+    expect(durationLabel(aggregateCampaignBilling([measured, interrupted]).agentRunDurationMs)).toBe("Unknown");
+    const zero = buildRuntimeUsage({ environmentId: "local", runs: [
+      { startedAt: "2026-10-21T00:00:00Z", finishedAt: "2026-10-21T00:00:00Z" },
+    ] });
+    expect(zero.agentRunDurationMs).toBe(0);
+    expect(durationLabel(zero.agentRunDurationMs)).toBe("0ms");
+  });
+
+  it.each([undefined, "not-a-date", "2026-10-20T23:59:59Z"])("retains unknown time for a missing or invalid end timestamp: %s", finishedAt => {
+    const runtimeUsage = buildRuntimeUsage({ environmentId: "daytona", runs: [
+      { startedAt: "2026-10-21T00:00:00Z", finishedAt: "2026-10-21T00:00:04Z" },
+      { startedAt: "2026-10-21T00:00:00Z", finishedAt },
+    ], leases: [{ acquiredAt: "2026-10-21T00:00:00Z", releasedAt: finishedAt,
+      metadata: { cpu: 4, memory: 4, disk: 10 } }] });
+    expect(runtimeUsage).toMatchObject({ agentRunDurationMs: null, leaseDurationMs: null, costStatus: "unavailable" });
+    expect(runtimeUsage.estimatedListCostUsd).toBeUndefined();
+    const retained = result({ environmentId: "daytona", runtimeUsage });
+    expect(() => validateRetainedRunnerResult(retained)).not.toThrow();
+    expect(aggregateCampaignBilling([retained, result()]).leaseDurationMs).toBeNull();
+    expect(aggregateCampaignBilling([result()]).leaseDurationMs).toBe(0);
+  });
+
   it("reads precise provider amounts without relabeling estimates or unpriced usage", () => {
     const precise = summarizeExecutionBilling(result({ usage: {
       inputTokens: 0, outputTokens: 0, cachedInputTokens: 5,
