@@ -72351,7 +72351,9 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
           status: "running",
           contextSnapshot: {},
         });
-        const runsBefore = await readHeartbeatRunsByCompanyId(lane.fixture.companyId);
+        // Compare complete row values in a stable order; PostgreSQL does not
+        // promise the same scan order after the draft-stop transaction.
+        const runsBefore = await readHeartbeatRunsByCompanyId(lane.fixture.companyId).orderBy(asc(heartbeatRuns.id));
         let stoppedId = 0;
         lane.setHook(async (method, body) => {
           if (method.endsWith("Draft") && !stoppedId) {
@@ -72380,7 +72382,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
           .where(eq(issueComments.id, publication!.commentId!));
         expect(comment!.body).toContain("END-first-stopped");
         expect(
-          await readHeartbeatRunsByCompanyId(lane.fixture.companyId),
+          await readHeartbeatRunsByCompanyId(lane.fixture.companyId).orderBy(asc(heartbeatRuns.id)),
         ).toEqual(runsBefore);
         expect(lane.context.cancelRun).not.toHaveBeenCalled();
         expect(

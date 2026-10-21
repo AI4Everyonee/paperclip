@@ -1,27 +1,4 @@
-import { createRequire } from "node:module";
-
-const require = createRequire(new URL("../../server/package.json", import.meta.url));
-const protobuf = require("protobufjs") as typeof import("../../server/node_modules/protobufjs/index.js");
-const root = protobuf.parse(`syntax = "proto3";
-message AnyValue { oneof value { string string_value = 1; bool bool_value = 2; int64 int_value = 3; double double_value = 4; ArrayValue array_value = 5; KeyValueList kvlist_value = 6; bytes bytes_value = 7; } }
-message ArrayValue { repeated AnyValue values = 1; }
-message KeyValueList { repeated KeyValue values = 1; }
-message KeyValue { string key = 1; AnyValue value = 2; }
-message Resource { repeated KeyValue attributes = 1; }
-message Scope { repeated KeyValue attributes = 3; }
-message Event { repeated KeyValue attributes = 3; }
-message Link { repeated KeyValue attributes = 4; }
-message Span { repeated KeyValue attributes = 9; repeated Event events = 11; repeated Link links = 13; }
-message ScopeSpans { Scope scope = 1; repeated Span spans = 2; }
-message ResourceSpans { Resource resource = 1; repeated ScopeSpans scope_spans = 2; }
-message Traces { repeated ResourceSpans resource_spans = 1; }
-message LogRecord { AnyValue body = 5; repeated KeyValue attributes = 6; }
-message ScopeLogs { Scope scope = 1; repeated LogRecord log_records = 2; }
-message ResourceLogs { Resource resource = 1; repeated ScopeLogs scope_logs = 2; }
-message Logs { repeated ResourceLogs resource_logs = 1; }
-message PartialSuccess { int64 rejected = 1; }
-message Response { PartialSuccess partial_success = 1; }
-`).root.resolveAll();
+import { evalOtlpSchema as root, protobuf } from "./eval-otlp-schema.js";
 
 export type EvalOtlpSignal = "traces" | "logs";
 export const isEvalProjectId = (value: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
@@ -54,22 +31,24 @@ function validateWire(body: Buffer, type: import("../../server/node_modules/prot
         if (!field.repeated && seen.has(id) || field.partOf && seen.has(field.partOf.name)) throw new Error("ambiguous_otlp_wire");
         seen.add(id); if (field.partOf) seen.add(field.partOf.name);
         const nested = field.resolvedType instanceof protobuf.Type ? field.resolvedType : undefined;
-        const expected = nested || ["string", "bytes"].includes(field.type) ? 2 : field.type === "double" ? 1 : 0;
+        const expected = nested || ["string", "bytes"].includes(field.type) ? 2
+          : ["double", "fixed64", "sfixed64"].includes(field.type) ? 1
+          : ["float", "fixed32", "sfixed32"].includes(field.type) ? 5 : 0;
         if (wire !== expected) throw new Error("invalid_otlp_wire");
         if (nested) {
           const length = reader.uint32(), next = reader.pos + length;
           if (next > end) throw new Error("invalid_otlp_wire");
           inspect(nested, next, depth + 1);
         } else reader.skipType(wire);
-      } else reader.skipType(wire);
+      } else throw new Error("unqualified_otlp_field");
       if (reader.pos > end) throw new Error("invalid_otlp_wire");
     }
   };
   inspect(type, body.length, 0);
 }
 
-export function validateEvalOtlpPayload(body: Buffer, contentType: string, signal: EvalOtlpSignal, projectId: string): Buffer {
-  const type = root.lookupType(signal === "traces" ? "Traces" : "Logs");
+export function validateEvalOtlpPayload(body: Buffer, contentType: string, signal: EvalOtlpSignal, projectId: string) {
+  const type = root.lookupType(signal === "traces" ? "TracesData" : "LogsData");
   if (contentType !== "application/json") validateWire(body, type);
   const decoded: unknown = contentType === "application/json" ? JSON.parse(body.toString("utf8")) : type.decode(body).toJSON();
   if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) throw new Error("invalid_otlp_payload");
@@ -93,7 +72,42 @@ export function validateEvalOtlpPayload(body: Buffer, contentType: string, signa
     Object.values(row).forEach(item => inspect(item, depth + 1));
   };
   inspect(decoded, 0);
-  return contentType === "application/json" ? Buffer.from(JSON.stringify(decoded)) : body;
+  const canonical = Buffer.from(JSON.stringify(decoded));
+  const sizing = expandedEvalOtlpSize(decoded as Record<string, unknown>, signal);
+  return { body: contentType === "application/json" ? canonical : body, ...sizing };
+}
+
+// Local source-data measurement, not Braintrust's processed-data meter. Count
+// the complete source plus a standalone envelope per record so shared resource
+// and scope metadata cannot hide arbitrary expansion behind a small wire body.
+function expandedEvalOtlpSize(decoded: Record<string, unknown>, signal: EvalOtlpSignal) {
+  const bytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
+  const object = (value: unknown): Record<string, unknown> => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid_otlp_record");
+    return value as Record<string, unknown>;
+  };
+  const take = (row: Record<string, unknown>, camel: string, snake = camel) => {
+    if (camel !== snake && Object.hasOwn(row, camel) && Object.hasOwn(row, snake)) throw new Error("ambiguous_otlp_collection");
+    const value = Object.hasOwn(row, camel) ? row[camel] : Object.hasOwn(row, snake) ? row[snake] : [];
+    if (!Array.isArray(value)) throw new Error("invalid_otlp_collection");
+    const rest = Object.fromEntries(Object.entries(row).filter(([key]) => key !== camel && key !== snake));
+    return { rows: value, rest };
+  };
+  const traces = signal === "traces";
+  const resources = take(decoded, traces ? "resourceSpans" : "resourceLogs", traces ? "resource_spans" : "resource_logs");
+  let recordCount = 0, expandedBytes = bytes(decoded);
+  for (const resource of resources.rows) {
+    const scopes = take(object(resource), traces ? "scopeSpans" : "scopeLogs", traces ? "scope_spans" : "scope_logs");
+    for (const scope of scopes.rows) {
+      const records = traces ? take(object(scope), "spans") : take(object(scope), "logRecords", "log_records");
+      const envelopeBytes = bytes({ source: resources.rest, resource: scopes.rest, scope: records.rest, record: {} }) - 2;
+      for (const record of records.rows) {
+        recordCount++;
+        expandedBytes += envelopeBytes + bytes(object(record));
+      }
+    }
+  }
+  return { recordCount, expandedBytes };
 }
 
 export function evalOtlpRejected(body: Buffer, contentType: string, signal: EvalOtlpSignal): number {

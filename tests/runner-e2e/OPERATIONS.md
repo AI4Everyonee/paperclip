@@ -251,20 +251,29 @@ rejects ambiguous singular fields and routing values.
 
 Each relay allows at most 2,048 admitted exports, 8 MiB per request before and
 after decompression, 64 MiB of forwarded payloads, and four simultaneous exports.
+It also limits each attempt to 16,384 records and 256 MiB of expanded source
+JSON. This measurement includes the full decoded source plus each record in
+its own envelope with the shared resource and scope fields repeated. It counts
+span names, IDs, times, events, links and log bodies, not only routing attributes.
+Protobuf fields use the pinned OTLP v1.9 schema; unknown fields fail admission
+until the schema is updated. Existing valid payloads are forwarded unchanged.
 It closes at the campaign deadline or four hours after startup, whichever comes
 first. Admission consumes the allowance before upstream dispatch. Failures and
 client retries do not refund it; the relay itself never retries. A durable receipt
 must be written before dispatch and before acknowledging the receiver outcome.
 
-Private `<ledgerPath>.otlp/<attempt-hash>.jsonl` receipts record policy,
+Version 2 private `<ledgerPath>.otlp/<attempt-hash>.jsonl` receipts record policy,
 admission time, wire/payload bytes, payload digest, dispatch/outcome, partial
-rejection counts, and closure totals. They contain no payload bodies, tokens or
+rejection counts, record counts, expanded source bytes, and closure totals.
+Version 1 receipts remain readable with unknown expanded size and record count.
+They contain no payload bodies, tokens or
 upstream error text. Receipt files are exclusive and cannot be reset on restart.
 An admission without an outcome is unresolved. Accepted ingestion does not prove
 indexing, and attempted forwarding bytes are not billed Braintrust storage.
 These receipts do not replace the observability overhead reservation or invoice
 reconciliation. After the worker relay closes, bounded controller finalization
 uses a separate one-request, 64 KiB relay with a 30-second deadline. Its exclusive
+expanded-source allowance is 1 MiB with at most 256 records. Its
 receipt is `<ledgerPath>.otlp/<attempt-hash>-finalization.jsonl`. This preserves
 the original trace and grade while accounting for the final controller export.
 This path currently supports the admitted local cells; remote transport remains
@@ -286,6 +295,12 @@ or an invoice. Vendor charges remain unreconciled. The current two-attempt daily
 maximum is 132.125 MiB and the four-attempt weekly maximum is 260.25 MiB,
 including finalization and the campaign's experiment payload allowance. These
 bounds do not include other projects, standalone imports or retained storage.
+The corresponding expanded-source ceilings are 514 MiB daily and 1,028 MiB
+weekly before the separate 4-MiB experiment allowance. These source measurements
+support a priced forecast; they are not Braintrust's processed-data meter or a
+vendor-enforced dollar limit. Gateway auto-logging is a separate input to that
+forecast. Retain vendor usage reports for reconciliation rather than equating
+transport or expanded source bytes with an invoice.
 
 ## Recurring campaigns
 
