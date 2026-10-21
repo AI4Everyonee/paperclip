@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import { afterEach, expect, it, vi } from "vitest";
 import { EvalAttemptTrace, evalBraintrustConfig, exportBraintrustAttemptParent, finalizeEvalAttemptTrace } from "./braintrust.js";
 import { RunnerApi } from "./api.js";
-import { buildPaperclipServerEnvironment } from "./harness-env.js";
+import { buildPaperclipServerEnvironment, buildRunnerE2EProcessEnvironment } from "./harness-env.js";
 import { setupLiveFixtures } from "./live-fixtures.js";
 import { runnerMatrix } from "./catalog.js";
 import { buildProviderObservabilityLaunch } from "../../packages/adapter-utils/src/agent-observability.js";
@@ -21,6 +21,26 @@ it("requires explicit export routing and keeps ingestion credentials out of serv
   expect(() => evalBraintrustConfig({ PAPERCLIP_E2E_BRAINTRUST_PROJECT_ID: projectId })).toThrow("API key");
   expect(() => evalBraintrustConfig({ PAPERCLIP_E2E_BRAINTRUST_PROJECT_ID: "bad", BRAINTRUST_API_KEY: config.apiKey })).toThrow("UUID");
   expect(buildPaperclipServerEnvironment({ BRAINTRUST_API_KEY: config.apiKey, BRAINTRUST_OTHER_KEY: "private", KEEP: "yes" })).toEqual({ KEEP: "yes" });
+});
+
+it("accepts only explicit loopback relay destinations and strips inherited relay endpoints", async () => {
+  const endpointBaseUrl = "http://127.0.0.1:43123/otel";
+  const env = { PAPERCLIP_E2E_BRAINTRUST_PROJECT_ID: projectId, BRAINTRUST_API_KEY: "attempt-token", PAPERCLIP_E2E_OTLP_RELAY_URL: endpointBaseUrl };
+  expect(evalBraintrustConfig(env)).toEqual({ projectId, apiKey: "attempt-token", endpointBaseUrl });
+  expect(buildPaperclipServerEnvironment(env).PAPERCLIP_E2E_OTLP_RELAY_URL).toBeUndefined();
+  expect(buildRunnerE2EProcessEnvironment(env, []).PAPERCLIP_E2E_OTLP_RELAY_URL).toBeUndefined();
+  for (const invalid of ["https://foreign.invalid/otel", "http://127.0.0.1:43123/otel?key=secret", "http://localhost:43123/otel", "http://127.0.0.1:99999/otel"]) {
+    expect(() => evalBraintrustConfig({ ...env, PAPERCLIP_E2E_OTLP_RELAY_URL: invalid })).toThrow();
+  }
+  const trace = new EvalAttemptTrace(evalBraintrustConfig(env)!, identity);
+  const putSensitive = vi.fn(async () => ({ settings: { enabled: true, credentialsConfigured: true, revision: projectId,
+    destination: { provider: "otlp", endpointBaseUrl } } }));
+  await trace.configureCompany({ putSensitive } as unknown as RunnerApi, companyId);
+  expect(putSensitive).toHaveBeenCalledWith(`/api/companies/${companyId}/observability`, expect.objectContaining({
+    destination: { provider: "otlp", endpointBaseUrl }, credentials: { mode: "replace", headers: [
+      { name: "authorization", value: "Bearer attempt-token" }, { name: "x-bt-parent", value: exportBraintrustAttemptParent(trace.snapshot()) },
+    ] },
+  }));
 });
 
 it("exports the SDK-verified project-log parent format and refuses invalid identifiers", () => {

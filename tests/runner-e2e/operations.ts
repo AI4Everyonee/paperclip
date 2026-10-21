@@ -5,6 +5,8 @@ import { createEvalAttemptPhase, readEvalAttemptPhase } from "./attempt-phase.js
 import { EvalSpendState, openEvalCostLedger, type EvalSpendLimits } from "./cost-ledger.js";
 import { evalRequestReservation, startEvalGateway, type EvalGatewayRoute, type EvalGatewayReceipt } from "./eval-gateway.js";
 import type { MatrixExecution } from "./types.js";
+import { evalBraintrustConfig } from "./braintrust.js";
+import { startEvalOtlpRelay } from "./eval-otlp-relay.js";
 
 export interface EvalOperationsManifest {
   version: 1;
@@ -60,12 +62,14 @@ export async function openEvalOperations(file: string, executions: readonly Matr
   }
   const required = manifest.route === "braintrust" ? ["BRAINTRUST_API_KEY"] : executions.map(execution => execution.profile.credential);
   if (required.some(name => !env[name]?.trim())) throw new Error("Missing eval gateway upstream credential");
+  const observability = evalBraintrustConfig({ ...env, PAPERCLIP_E2E_OTLP_RELAY_URL: undefined });
+  if (observability && manifest.route === "braintrust" && observability.projectId !== manifest.projectId) throw new Error("Eval gateway and OTLP projects differ");
   const receiptDirectory = `${manifest.ledgerPath}.requests`;
   await mkdir(receiptDirectory, { recursive: true, mode: 0o700 });
   const phaseDirectory = `${manifest.ledgerPath}.attempts`;
   await mkdir(phaseDirectory, { recursive: true, mode: 0o700 });
   const ledger = await openEvalCostLedger(manifest.ledgerPath, { ...manifest.limits, maxAttemptsPerExecution: manifest.maxAttemptsPerExecution });
-  const active = new Set<Awaited<ReturnType<typeof startEvalGateway>>>();
+  const active = new Set<{ close(): Promise<void> }>();
   const atomicJson = async (file: string, value: unknown) => {
     await writeFile(`${file}.tmp`, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
     await rename(`${file}.tmp`, file);
@@ -89,8 +93,20 @@ export async function openEvalOperations(file: string, executions: readonly Matr
         identity, resolveIdentity: () => readEvalAttemptPhase(phasePath, identity), deadlineAt: Date.parse(manifest.limits.deadlineAt),
         persist: (receipt: EvalGatewayReceipt) => atomicJson(path.join(receiptDirectory, `${receipt.requestId}.json`), receipt),
       });
-      active.add(gateway);
-      return { ...gateway, phasePath, async close() { if (!active.delete(gateway)) return; await gateway.close(); } };
+      let relay: Awaited<ReturnType<typeof startEvalOtlpRelay>> | undefined;
+      try {
+        if (observability) relay = await startEvalOtlpRelay({ projectId: observability.projectId, apiKey: observability.apiKey,
+          campaignId: manifest.limits.campaignId, attemptId, deadlineAt: Math.min(Date.parse(manifest.limits.deadlineAt), Date.now() + 4 * 3_600_000),
+          receiptPath: path.join(`${manifest.ledgerPath}.otlp`, `${createHash("sha256").update(attemptId).digest("hex")}.jsonl`) });
+      } catch (error) { await gateway.close(); throw error; }
+      let closing: Promise<void> | undefined;
+      const endpoint = { ...gateway, phasePath, observability: relay, close: () => closing ??= (async () => {
+        const results = await Promise.allSettled([gateway.close(), relay?.close()]);
+        active.delete(endpoint);
+        if (results.some(result => result.status === "rejected")) throw new Error("Eval gateway or OTLP relay cleanup failed");
+      })() };
+      active.add(endpoint);
+      return endpoint;
     },
     async close() {
       const results = await Promise.allSettled([...active].map(gateway => gateway.close())); active.clear();

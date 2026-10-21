@@ -119,6 +119,34 @@ holds its reservation. Provider prompt caching stays enabled and is metered.
 The response stream is passed through and cumulative usage is counted once.
 Gateway and native tracing are separate opt-ins; see the README tracing section.
 
+When both a bounded operations manifest and explicit Braintrust tracing are
+configured, the launcher starts a separate loopback OTLP relay for each attempt.
+The worker and its native providers receive an expiring ingest token. The
+Braintrust service key stays in the controller, even when model requests use
+Braintrust without native tracing. The relay accepts only trace/log exports to
+the configured project; neither request headers nor payload parent metadata can
+select another project or an API endpoint. JSON is canonicalized before export;
+protobuf payloads retain their original fields after bounded validation, which
+rejects ambiguous singular fields and routing values.
+
+Each relay allows at most 2,048 admitted exports, 8 MiB per request before and
+after decompression, 64 MiB of forwarded payloads, and four simultaneous exports.
+It closes at the campaign deadline or four hours after startup, whichever comes
+first. Admission consumes the allowance before upstream dispatch. Failures and
+client retries do not refund it; the relay itself never retries. A durable receipt
+must be written before dispatch and before acknowledging the receiver outcome.
+
+Private `<ledgerPath>.otlp/<attempt-hash>.jsonl` receipts record policy,
+admission time, wire/payload bytes, payload digest, dispatch/outcome, partial
+rejection counts, and closure totals. They contain no payload bodies, tokens or
+upstream error text. Receipt files are exclusive and cannot be reset on restart.
+An admission without an outcome is unresolved. Accepted ingestion does not prove
+indexing, and attempted forwarding bytes are not billed Braintrust storage.
+These receipts do not replace the observability overhead reservation or invoice
+reconciliation. Controller finalization still uses its direct exporter after
+the worker relay closes and is outside these relay traffic totals. This path
+currently supports the admitted local cells; remote transport remains unqualified.
+
 ## Recurring campaigns
 
 The existing `runner-full-stack-e2e.yml` owns both schedules: daily at 08:47 UTC

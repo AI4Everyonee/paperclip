@@ -444,10 +444,29 @@ incomplete.
 
 Braintrust export requires an explicit eval project UUID. Native capture includes
 prompts, responses, and tool content only after that opt-in configures the isolated
-company's observability destination. The ingestion key crosses the public API via
+company's observability destination. The ingestion credential crosses the public API via
 Node fetch, outside Playwright tracing, and is included in launcher evidence
 redaction. Orchestration spans contain identifiers, phase timing, outcome, and
 feedback counts; they never contain provider credentials or feedback bodies.
+
+With a bounded operations manifest, the ingestion credential is an expiring
+per-attempt relay token. The organization-wide Braintrust key stays in the
+controller. Only authenticated POSTs to the relay's trace/log ingest paths are
+allowed, with a fixed HTTPS upstream and redirects disabled. Header and payload
+`braintrust.parent` values must reference the selected project. Duplicate protobuf
+singular/oneof fields are refused, and JSON is canonicalized to remove duplicate
+key ambiguity. The token cannot call model, read, delete, or other API endpoints;
+it can still write records within the selected project until its finite request,
+byte or time allowance is exhausted. It is not an attempt-level row permission.
+
+The worker environment removes upstream provider/Braintrust credentials before
+inserting the model and OTLP relay tokens. Ambient relay URLs are discarded, and
+the fixture server receives the selected endpoint through company settings.
+Both tokens participate in evidence redaction. Private OTLP receipts retain
+metadata only, and persistence errors stop further admission. The relay closes
+with the model gateway before controller finalization. The controller's direct
+finalization export and tracing without an operations manifest retain the
+existing direct credential path. Remote relay publication is not enabled here.
 
 The bounded operations manifest is credential-free and private. Its parent-owned
 loopback gateway uses an ephemeral per-attempt token. Upstream credentials stay

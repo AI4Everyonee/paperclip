@@ -5,14 +5,24 @@ import type { FailureClass, RunnerE2EResult } from "./types.js";
 
 export const EVAL_OBSERVABILITY_SECRET_NAMES = ["BRAINTRUST_API_KEY"] as const;
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-export interface EvalBraintrustConfig { projectId: string; apiKey: string }
+export interface EvalBraintrustConfig { projectId: string; apiKey: string; endpointBaseUrl?: string }
+function evalOtlpEndpoint(config: EvalBraintrustConfig) {
+  if (config.endpointBaseUrl !== undefined && !/^http:\/\/127\.0\.0\.1:[1-9][0-9]{0,4}\/otel$/.test(config.endpointBaseUrl)) {
+    throw new Error("Eval OTLP relay must use the parent-owned loopback endpoint");
+  }
+  if (config.endpointBaseUrl && Number(new URL(config.endpointBaseUrl).port) > 65535) throw new Error("Invalid eval OTLP relay port");
+  return config.endpointBaseUrl ?? "https://api.braintrust.dev/otel";
+}
 export function evalBraintrustConfig(env: NodeJS.ProcessEnv): EvalBraintrustConfig | undefined {
   const projectId = env.PAPERCLIP_E2E_BRAINTRUST_PROJECT_ID;
   if (!projectId) return undefined;
   if (!uuid.test(projectId) || !env.BRAINTRUST_API_KEY?.trim() || /[\r\n]/.test(env.BRAINTRUST_API_KEY)) {
     throw new Error("Eval Braintrust export requires an explicit project UUID and API key");
   }
-  return { projectId, apiKey: env.BRAINTRUST_API_KEY.trim() };
+  const config = { projectId, apiKey: env.BRAINTRUST_API_KEY.trim(),
+    ...(env.PAPERCLIP_E2E_OTLP_RELAY_URL ? { endpointBaseUrl: env.PAPERCLIP_E2E_OTLP_RELAY_URL } : {}) };
+  evalOtlpEndpoint(config);
+  return config;
 }
 
 type Attributes = Record<string, string | number | boolean | string[]>;
@@ -36,7 +46,6 @@ export interface EvalFinalizationReceipt {
 }
 const require = createRequire(new URL("../../server/package.json", import.meta.url));
 const time = (ms: number): [number, number] => [Math.floor(ms / 1000), (ms % 1000) * 1_000_000];
-const braintrustOtlpEndpoint = "https://api.braintrust.dev/otel";
 
 export function exportBraintrustAttemptParent(receipt: Pick<EvalTraceReceipt, "projectId" | "spanId" | "traceId">): string {
   if (!uuid.test(receipt.projectId) || !/^[0-9a-f]{16}$/.test(receipt.spanId) || !/^[0-9a-f]{32}$/.test(receipt.traceId)
@@ -51,8 +60,10 @@ export class EvalAttemptTrace {
   private readonly phases: PhaseSpan[] = [];
   private active?: PhaseSpan;
   private readonly receipt: EvalTraceReceipt;
+  private readonly endpointBaseUrl: string;
   constructor(private readonly config: EvalBraintrustConfig, private readonly identity: EvalTraceIdentity, private readonly provenance?: EvalTraceProvenance,
     context?: { receipt: EvalTraceReceipt; startedAtMs: number }) {
+    this.endpointBaseUrl = evalOtlpEndpoint(config);
     if (Object.values(identity).some(value => typeof value !== "string" || !value || value.length > 512 || /[\r\n]/.test(value))) throw new Error("Invalid eval trace identity");
     if (provenance && (Object.values(provenance).some(value => value !== null && (typeof value !== "string" || !value || value.length > 512 || /[\r\n]/.test(value)))
         || !/^[0-9a-f]{64}$/.test(provenance.suiteDefinitionHash)
@@ -88,7 +99,7 @@ export class EvalAttemptTrace {
       const saved = await api.putSensitive<{ settings: { revision: string; enabled: boolean; credentialsConfigured: boolean; destination: { provider: string; endpointBaseUrl?: string } } }>(
         `/api/companies/${companyId}/observability`, {
           expectedRevision: null, enabled: true,
-          destination: { provider: "otlp", endpointBaseUrl: braintrustOtlpEndpoint },
+          destination: { provider: "otlp", endpointBaseUrl: this.endpointBaseUrl },
           credentials: { mode: "replace", headers: [
             { name: "authorization", value: `Bearer ${this.config.apiKey}` },
             { name: "x-bt-parent", value: exportBraintrustAttemptParent(this.receipt) },
@@ -96,7 +107,7 @@ export class EvalAttemptTrace {
           capture: { userPrompts: true, assistantResponses: true, toolDetails: true, toolContent: true },
         });
       if (!saved.settings?.enabled || !saved.settings.credentialsConfigured || !uuid.test(saved.settings.revision)
-          || saved.settings.destination.provider !== "otlp" || saved.settings.destination.endpointBaseUrl !== braintrustOtlpEndpoint) throw new Error("Unexpected observability setting");
+          || saved.settings.destination.provider !== "otlp" || saved.settings.destination.endpointBaseUrl !== this.endpointBaseUrl) throw new Error("Unexpected observability setting");
       this.receipt.revision = saved.settings.revision;
       this.receipt.nativeConfiguration = "configured";
     } catch {
@@ -143,7 +154,7 @@ export class EvalAttemptTrace {
         ...this.phases.map(phase => span(`paperclip.eval.${phase.name}`, phase.spanId, phase.start, phase.end!, phase.failed ?? false, true)),
       ]);
       if (!body) throw new Error("serialization");
-      const response = await transport(`${braintrustOtlpEndpoint}/v1/traces`, {
+      const response = await transport(`${this.endpointBaseUrl}/v1/traces`, {
         method: "POST", redirect: "error", signal: AbortSignal.timeout(10_000),
         headers: { authorization: `Bearer ${this.config.apiKey}`, "x-bt-parent": `project_id:${this.config.projectId}`,
           "content-type": "application/x-protobuf", accept: "application/x-protobuf, application/json" },

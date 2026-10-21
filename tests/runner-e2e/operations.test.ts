@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import { runnerMatrix } from "./catalog.js";
@@ -8,6 +9,7 @@ import { setupLiveFixtures } from "./live-fixtures.js";
 import { createAiConnectionSchema, aiConnectionBindingSchema } from "../../packages/shared/src/ai-connections.js";
 import type { RunnerApi } from "./api.js";
 import { beginEvalAgentPhase, readEvalAttemptPhase } from "./attempt-phase.js";
+import { applyEvalGatewayEnvironment, buildPaperclipServerEnvironment } from "./harness-env.js";
 const cell = runnerMatrix.find(e => e.suite.id === "core-compatibility" && e.profile.id === "runner-codex" && e.environment.id === "local")!;
 function manifest(): EvalOperationsManifest {
   return { version: 1, limits: { campaignId: "pilot", maxUsd: "100", deadlineAt: new Date(Date.now() + 60_000).toISOString(), maxRequests: 20, maxConcurrent: 1 },
@@ -15,7 +17,7 @@ function manifest(): EvalOperationsManifest {
     models: [{ provider: "openai", maximumInputTokens: 1000, maximumOutputTokens: 100, timeoutMs: 1000,
       price: { provider: "openai", model: cell.profile.model, version: "fixture-only", sourceUrl: "https://provider.invalid/fixture", inputUsdPerMillion: "2", cachedReadUsdPerMillion: "1", outputUsdPerMillion: "10", cacheWrite30mUsdPerMillion: "2", cacheWrite12hUsdPerMillion: "2" } }] };
 }
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
 it("admits only the exact bounded local selection and explicitly priced models", () => {
   expect(validateEvalOperationsManifest(manifest(), [cell], 1)).toMatchObject({ route: "direct" });
   expect(() => validateEvalOperationsManifest({ ...manifest(), executionIds: [] }, [cell], 1)).toThrow("selection");
@@ -56,6 +58,60 @@ it("retains a campaign summary and refuses changing its budget on restart", asyn
     await writeFile(file, JSON.stringify({ ...value, limits: { ...value.limits, maxUsd: "101" } }));
     await expect(openEvalOperations(file, [cell], 0, { OPENAI_API_KEY: "private-fixture" })).rejects.toThrow("limits changed");
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+it("keeps both upstream keys on the controller and owns the trace relay lifetime", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "eval-ops-relay-"));
+  const value = { ...manifest(), ledgerPath: path.join(root, "ledger.jsonl") }, file = path.join(root, "manifest.json");
+  const env = { OPENAI_API_KEY: "provider-private", BRAINTRUST_API_KEY: "braintrust-private", BRAINTRUST_OTHER_KEY: "other-private",
+    GITHUB_SHA: "a".repeat(40), PAPERCLIP_E2E_BRAINTRUST_PROJECT_ID: "11111111-1111-4111-8111-111111111111",
+    PAPERCLIP_E2E_OTLP_RELAY_URL: "https://unowned.invalid/otel" };
+  let operations: Awaited<ReturnType<typeof openEvalOperations>> | undefined;
+  try {
+    await writeFile(file, JSON.stringify(value));
+    operations = await openEvalOperations(file, [cell], 0, env);
+    const endpoint = await operations.start(cell, "with-observability", 1);
+    const worker: NodeJS.ProcessEnv = { ...env };
+    applyEvalGatewayEnvironment(worker, cell.profile.credential, endpoint);
+    expect(worker).toMatchObject({ OPENAI_API_KEY: endpoint.token, BRAINTRUST_API_KEY: endpoint.observability!.token,
+      PAPERCLIP_E2E_OTLP_RELAY_URL: endpoint.observability!.baseUrl, GITHUB_SHA: env.GITHUB_SHA });
+    expect(JSON.stringify(worker)).not.toMatch(/provider-private|braintrust-private|other-private/);
+    expect(buildPaperclipServerEnvironment(worker).BRAINTRUST_API_KEY).toBeUndefined();
+    expect((await fetch(endpoint.observability!.baseUrl + "/v1/traces", { method: "POST" })).status).toBe(401);
+    await operations.close(); operations = undefined;
+    await expect(fetch(endpoint.baseUrl)).rejects.toThrow();
+    await expect(fetch(endpoint.observability!.baseUrl)).rejects.toThrow();
+    const receipts = (await readFile(endpoint.observability!.receiptPath, "utf8")).trim().split("\n").map(line => JSON.parse(line));
+    expect(receipts.map(row => row.type)).toEqual(["policy", "closed"]);
+    expect(receipts[0]).toMatchObject({ campaignId: "pilot", attemptId: "with-observability", projectId: env.PAPERCLIP_E2E_BRAINTRUST_PROJECT_ID });
+    const withoutTracing: NodeJS.ProcessEnv = { ...env };
+    applyEvalGatewayEnvironment(withoutTracing, cell.profile.credential, { ...endpoint, observability: undefined });
+    expect(withoutTracing.BRAINTRUST_API_KEY).toBeUndefined();
+    expect(withoutTracing.PAPERCLIP_E2E_OTLP_RELAY_URL).toBeUndefined();
+  } finally { await operations?.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+it("rejects mismatched trace projects before opening the journal and retains failed relay admission", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "eval-ops-relay-failure-"));
+  const value = { ...manifest(), ledgerPath: path.join(root, "ledger.jsonl"), route: "braintrust" as const,
+    projectId: "11111111-1111-4111-8111-111111111111", maxAttemptsPerExecution: 1 }, file = path.join(root, "manifest.json");
+  const env = { BRAINTRUST_API_KEY: "braintrust-private", PAPERCLIP_E2E_BRAINTRUST_PROJECT_ID: "22222222-2222-4222-8222-222222222222" };
+  let operations: Awaited<ReturnType<typeof openEvalOperations>> | undefined;
+  try {
+    await writeFile(file, JSON.stringify(value));
+    await expect(openEvalOperations(file, [cell], 0, env)).rejects.toThrow("projects differ");
+    await expect(access(value.ledgerPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await mkdir(`${value.ledgerPath}.otlp`);
+    const receipt = path.join(`${value.ledgerPath}.otlp`, `${createHash("sha256").update("collision").digest("hex")}.jsonl`);
+    await writeFile(receipt, "retained-receipt");
+    operations = await openEvalOperations(file, [cell], 0, { ...env, PAPERCLIP_E2E_BRAINTRUST_PROJECT_ID: value.projectId });
+    await expect(operations.start(cell, "collision", 1)).rejects.toMatchObject({ code: "EEXIST" });
+    await expect(operations.start(cell, "replacement", 1)).rejects.toThrow("attempt cap");
+    await operations.close(); operations = undefined;
+    expect(await readFile(receipt, "utf8")).toBe("retained-receipt");
+    expect(JSON.parse(await readFile(`${value.ledgerPath}.summary.json`, "utf8")).admittedAttempts)
+      .toEqual([{ executionId: cell.id, attemptId: "collision" }]);
+  } finally { await operations?.close(); await rm(root, { recursive: true, force: true }); }
 });
 it.each([
   cell.id,

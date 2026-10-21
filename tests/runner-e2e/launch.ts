@@ -35,6 +35,7 @@ import { effectiveAutomaticRetryLimit, executeWithAutomaticRetry } from "./autom
 import { buildRunnerCampaign } from "./history.js";
 import { readEvalOperationsReport } from "./operations-report.js";
 import {
+  applyEvalGatewayEnvironment,
   buildRunnerE2EProcessEnvironment,
   resolvePaperclipRemoteRunnerBinaryForHarness,
   resolvePaperclipRunnerBinaryForHarness,
@@ -476,7 +477,7 @@ async function runAttempt(input: {
   const { executions, attempt, campaignId, options } = input;
   const accountingCampaignId = input.operations?.manifest.limits.campaignId ?? process.env.PAPERCLIP_E2E_ACCOUNTING_CAMPAIGN_ID ?? campaignId;
   const accountingAttemptId = randomBytes(16).toString("hex");
-  const traceConfig = evalBraintrustConfig(process.env);
+  const traceConfig = evalBraintrustConfig({ ...process.env, PAPERCLIP_E2E_OTLP_RELAY_URL: undefined });
   const execution = executions[0];
   if (!execution) throw new Error("A runner E2E cell must contain a task case");
   if (
@@ -535,6 +536,7 @@ async function runAttempt(input: {
     gateway = await input.operations?.start(execution, accountingAttemptId, attempt);
     const credentialSources = {
       PAPERCLIP_E2E_GATEWAY_TOKEN: gateway?.token,
+      PAPERCLIP_E2E_OTLP_RELAY_TOKEN: gateway?.observability?.token,
       ...Object.fromEntries([...CREDENTIAL_NAMES, ...EVAL_OBSERVABILITY_SECRET_NAMES].map((name) => [name, process.env[name]])),
       PAPERCLIP_AGENT_JWT_SECRET: agentJwtSecret,
       PAPERCLIP_DECISION_SIGNING_SECRET: decisionSigningSecret,
@@ -589,11 +591,7 @@ async function runAttempt(input: {
       BETTER_AUTH_SECRET: betterAuthSecret,
     };
     if (gateway) {
-      for (const name of CREDENTIAL_NAMES) delete childEnv[name];
-      childEnv[execution.profile.credential] = gateway.token;
-      childEnv.PAPERCLIP_E2E_GATEWAY_BASE_URL = gateway.baseUrl;
-      childEnv.PAPERCLIP_E2E_GATEWAY_TOKEN = gateway.token;
-      childEnv.PAPERCLIP_E2E_GATEWAY_PHASE_PATH = gateway.phasePath;
+      applyEvalGatewayEnvironment(childEnv, execution.profile.credential, gateway);
     }
     // The database URLs are stripped here and again at the Playwright web-server
     // boundary so a developer's shell can never redirect this paid test.
