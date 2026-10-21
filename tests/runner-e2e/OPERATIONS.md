@@ -271,7 +271,8 @@ campaign's declared overhead reservation:
 node --import tsx tests/runner-e2e/operating-receipts.ts import /private/path/ledger.jsonl /private/path/receipt.json /private/path/source-evidence.json
 ```
 
-The receipt contains `version: 1`, `campaignId`, `allowanceReference`, `component`,
+The receipt contains `version: 2`, `costBasis: "component_cumulative"`,
+`campaignId`, `allowanceReference`, `component`,
 the source file's `evidenceSha256`, `windowStartedAt`, `windowEndedAt`, `coverage`
 (`partial` or `complete`), `source` (`infrastructure` or `invoice`), `provider`,
 `classification`, and an explicit USD-string `costUsd` when known. Estimated and
@@ -284,9 +285,19 @@ Shared allocations must record their numerator, denominator, window and excluded
 costs in that source file. Do not import a whole shared invoice as one campaign's
 charge without an explicit allocation method.
 
+Each amount is the cumulative total for the entire component, including all its
+providers and separate charges through `windowEndedAt`. Later receipts must keep
+the same `windowStartedAt` and cannot shorten the window or make completed
+coverage partial again. Combine separate billing windows in the retained source
+evidence before importing their total; two separate $0.80 charges require a
+cumulative $1.60 receipt. Version 1 receipts lacked this declaration and are
+rejected on import. Existing journal records are preserved; the importer also
+refuses to extend a component whose prior receipts lack cumulative evidence.
+
 The importer validates campaign/allowance identity and source hash, retains both
 files privately under `ledger.jsonl.overhead/`, and syncs them before appending
-the observation. Reimporting an identical receipt is a no-op. A partial amount
+the observation. Retries sync matching existing files too. Reimporting an identical
+receipt adds no journal entry. A partial amount
 keeps the rest of the allowance held. Complete invoices can supersede estimates;
 conflicting complete invoices remain visible and block admission. This command
 does not open a new spending window, change limits, dispatch tests or rewrite
