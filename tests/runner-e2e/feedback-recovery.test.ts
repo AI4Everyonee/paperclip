@@ -1,14 +1,19 @@
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { recoverInterruptedFeedback, readRecoveredFeedback } from "./feedback-recovery.js";
 import { mustPreserveRecoveryState } from "./cleanup-verification.js";
 import { isHistoricalBundlePathAllowed } from "./history-publish.js";
 import type { RunnerApi } from "./api.js";
 
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, writeFile: vi.fn(actual.writeFile) };
+});
+
 const roots: string[] = [];
-afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
+afterEach(async () => { vi.mocked(writeFile).mockReset(); await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
 const identity = { campaignId: "campaign", attemptId: "attempt", executionId: "execution" };
 const companyId = "88c1939b-2d9f-4bb3-8ebc-8a7a85efeeac";
 const api = (get: (url: string) => unknown): Pick<RunnerApi, "get"> => ({ async get<T>(url: string) { return get(url) as T; } });
@@ -64,6 +69,35 @@ it("preserves completed attempt evidence without making another API request", as
   expect(calls).toBe(0);
   expect(await readFile(path.join(root, "result.json"), "utf8")).toBe("retained original");
   expect(await readRecoveredFeedback(root, identity)).toBeUndefined();
+});
+
+it("reports the earlier atomic checkpoint when a later write exhausts the recovery deadline", async () => {
+  const root = await fixture();
+  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+  let checkpointWrites = 0;
+  vi.mocked(writeFile).mockImplementation(async (file, data, options) => {
+    if (String(file).endsWith("agent-feedback-recovered.json.pending") && ++checkpointWrites === 3) {
+      const signal = typeof options === "object" && options ? options.signal : undefined;
+      if (!signal?.aborted) await new Promise(resolve => signal!.addEventListener("abort", resolve, { once: true }));
+      signal!.throwIfAborted();
+    }
+    return actual.writeFile(file, data, options);
+  });
+  const entry = { id: "saved", kind: "suggestion", runId: "run", body: "Keep this earlier durable checkpoint." };
+  await expect(recoverInterruptedFeedback({ identity, caseDirectory: root, deadlineAt: Date.now() + 1000,
+    secrets: [], api: api(url => {
+      if (url.includes("agent-commentary?")) return { items: [entry], total: 1 };
+      if (url.endsWith("agent-commentary/saved")) return entry;
+      return [];
+    }),
+  })).rejects.toThrow();
+  expect(checkpointWrites).toBe(3);
+  expect(await readRecoveredFeedback(root, identity)).toMatchObject({ suggestions: 1, bodiesCollected: 1,
+    collection: "partial", invocationCollection: "unavailable" });
+  expect(await readRecoveredFeedback(root, { ...identity, attemptId: "different" })).toBeUndefined();
+  await expect(readFile(path.join(root, "snapshots/feedback-recovery.json"))).rejects.toMatchObject({ code: "ENOENT" });
+  const saved = JSON.parse(await readFile(path.join(root, "snapshots/agent-feedback-recovered.json"), "utf8"));
+  expect(saved.entries[0].body).toBe(entry.body);
 });
 
 it("reports unavailable recovery without fabricating an empty successful collection", async () => {

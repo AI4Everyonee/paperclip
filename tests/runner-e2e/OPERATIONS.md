@@ -175,7 +175,9 @@ most five seconds collecting feedback from that attempt's saved company before
 stopping the isolated server. Recovery snapshots remain private and are kept
 separate from the worker's original evidence. The failed result includes any
 recovered counts and review fingerprints; active runs or missing reads remain
-partial or unavailable. Completed results are never replaced. The launcher
+partial or unavailable. Each atomic recovery checkpoint carries its attempt
+identity, so a later write timeout cannot hide already saved feedback when the
+final receipt is absent. Completed results are never replaced. The launcher
 retains the private database whenever a worker result is missing, including when
 the supervisor was killed before it could capture feedback. This retention is
 reported as unconfirmed cleanup and requires inspecting the retained state.

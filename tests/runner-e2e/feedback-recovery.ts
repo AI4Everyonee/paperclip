@@ -29,6 +29,8 @@ export async function recoverInterruptedFeedback(input: {
   const companyId = fixture.companyId!;
   let summary = emptyFeedbackSummary();
   let checkpoint: FeedbackEvidence | undefined;
+  const recoveryReceipt = (summary: FeedbackSummary) => ({ version: 1, ...input.identity, companyId,
+    reason: "worker_exited_without_result", summary });
   const save = async (name: string, value: unknown, signal: AbortSignal = deadline) => {
     const text = JSON.stringify(sanitizeJson(value, input.secrets), null, 2) + "\n";
     assertSecretFree(text, input.secrets, name);
@@ -36,12 +38,16 @@ export async function recoverInterruptedFeedback(input: {
     signal.throwIfAborted();
     await rename(path.join(snapshots, `${name}.pending`), path.join(snapshots, name));
   };
+  const saveCheckpoint = (evidence: FeedbackEvidence, signal: AbortSignal = deadline) =>
+    save("agent-feedback-recovered.json", { ...evidence, recovery: recoveryReceipt({ ...evidence.summary,
+      collection: evidence.summary.bodiesCollected ? "partial" : "unavailable",
+      invocationCollection: evidence.invocations.length ? "partial" : "unavailable" }) }, signal);
   try {
     const original = JSON.parse(await readFile(path.join(snapshots, "agent-feedback.json"), { encoding: "utf8", signal: deadline }));
     if (original.version === 1 && original.companyId === companyId && original.summary?.version === 1
       && Array.isArray(original.entries) && Array.isArray(original.invocations)
       && original.summary.bodiesCollected === original.entries.length) {
-      await save("agent-feedback-recovered.json", original);
+      await saveCheckpoint(original);
       checkpoint = original;
       summary = structuredClone(original.summary);
     }
@@ -51,7 +57,7 @@ export async function recoverInterruptedFeedback(input: {
       persist: async (evidence, signal) => {
         if (checkpoint && (!checkpoint.entries.every(entry => evidence.entries.some(next => next.id === entry.id))
           || !checkpoint.invocations.every(call => evidence.invocations.some(next => next.runId === call.runId && next.callId === call.callId)))) return;
-        await save("agent-feedback-recovered.json", evidence, signal);
+        await saveCheckpoint(evidence, signal);
         checkpoint = structuredClone(evidence);
         summary = structuredClone(evidence.summary);
       },
@@ -63,16 +69,17 @@ export async function recoverInterruptedFeedback(input: {
     summary.collection = summary.bodiesCollected ? "partial" : "unavailable";
     summary.invocationCollection = "unavailable";
   }
-  await save("feedback-recovery.json", { version: 1, ...input.identity, companyId,
-    reason: "worker_exited_without_result", summary });
+  await save("feedback-recovery.json", recoveryReceipt(summary));
 }
 
 export async function readRecoveredFeedback(caseDirectory: string, identity: FeedbackRecoveryIdentity): Promise<FeedbackSummary | undefined> {
   try {
     const snapshots = path.join(caseDirectory, "snapshots");
-    const receipt = JSON.parse(await readFile(path.join(snapshots, "feedback-recovery.json"), "utf8"));
     const evidence = JSON.parse(await readFile(path.join(snapshots, "agent-feedback-recovered.json"), "utf8"));
-    if (receipt.version !== 1 || evidence.version !== 1 || receipt.reason !== "worker_exited_without_result"
+    let receipt = evidence.recovery;
+    try { receipt = JSON.parse(await readFile(path.join(snapshots, "feedback-recovery.json"), "utf8")); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") return; }
+    if (receipt?.version !== 1 || evidence.version !== 1 || receipt.reason !== "worker_exited_without_result"
       || !receipt.companyId || receipt.companyId !== evidence.companyId
       || Object.entries(identity).some(([key, value]) => receipt[key] !== value)) return;
     const summary = evidence.summary as FeedbackSummary;
