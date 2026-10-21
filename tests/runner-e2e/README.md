@@ -822,7 +822,8 @@ timings, token and cost accounting, and evidence links. The campaign header
 aggregates input, output, and cached tokens, provider-reported LLM spend,
 Daytona list-price runtime estimates, and pricing coverage. Missing provider
 usage is labeled `unavailable` or `unpriced`; it is never presented as zero
-cost. The CI report job stages the same portable site at
+cost. A known subtotal from a partially priced run stays in campaign spending,
+with a partial-amount label and incomplete billing coverage. The CI report job stages the same portable site at
 `normalized/index.html` inside the access-controlled merged report artifact.
 
 Campaign billing retains a separate numeric receipt for each attempt, including

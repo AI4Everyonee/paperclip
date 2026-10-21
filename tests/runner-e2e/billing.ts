@@ -43,14 +43,15 @@ export interface CampaignBillingSummary {
 }
 
 /** Render observed subtotals without presenting absent measurements as zero. */
-export function billingCoverageLabel(value: string, covered: number, total: number): string {
+export function billingCoverageLabel(value: string, covered: number, total: number, incompleteAmount = false): string {
   if (!Number.isInteger(covered) || !Number.isInteger(total) || covered <= 0 || total <= 0 || covered > total) {
     return "Unavailable";
   }
-  return covered < total ? `${value} (partial: ${covered}/${total} runs)` : value;
+  return covered < total ? `${value} (partial: ${covered}/${total} runs)` : incompleteAmount ? `${value} (partial amount)` : value;
 }
 
-function costCoverageStatus(runs: number, tokens: number, reported: number, estimated: number): RunnerE2EBillingSummary["llm"]["costStatus"] {
+function costCoverageStatus(runs: number, tokens: number, reported: number, estimated: number, partial = 0): RunnerE2EBillingSummary["llm"]["costStatus"] {
+  if (partial > 0) return "partial";
   if (runs > 0 && reported === runs) return "reported";
   if (runs > 0 && reported + estimated === runs) return "estimated";
   if (reported + estimated > 0) return "partial";
@@ -100,7 +101,7 @@ function usageMeasurement(usage: Record<string, unknown>) {
 }
 
 function usageCostUsd(usage: Record<string, unknown>) {
-  if (usage.costStatus === "unpriced" || usage.billingType === "subscription") return undefined;
+  if (usage.billingType === "subscription") return undefined;
   const measurement = usageMeasurement(usage);
   const exact = typeof usage.costUsdExact === "string" && /^\d+(?:\.\d+)?$/.test(usage.costUsdExact)
     ? finiteNumber(Number(usage.costUsdExact)) : undefined;
@@ -112,12 +113,13 @@ function usageCostUsd(usage: Record<string, unknown>) {
       "costUsd",
       "providerCostUsd",
     ]);
-  if (direct !== undefined) return direct;
+  if (direct !== undefined) return usage.costStatus === "unpriced" && direct === 0 ? undefined : direct;
   const cost = record(usage.cost);
   const currency =
     typeof cost.currency === "string" ? cost.currency.toUpperCase() : "USD";
   if (currency !== "USD") return undefined;
-  return firstNumber(cost, ["amount", "total"]);
+  const amount = firstNumber(cost, ["amount", "total"]);
+  return usage.costStatus === "unpriced" && amount === 0 ? undefined : amount;
 }
 
 function usageEntries(
@@ -277,6 +279,7 @@ export function summarizeExecutionBilling(
   let runsWithTokenUsage = 0;
   let runsWithReportedCost = 0;
   let runsWithEstimatedCost = 0;
+  let runsWithPartialReportedCost = 0;
   let reportedCostUsd = 0;
   let estimatedCostUsd = 0;
   let incompleteReceipt = false;
@@ -311,19 +314,20 @@ export function summarizeExecutionBilling(
         estimatedCostUsd += costUsd;
       } else {
         runsWithReportedCost += 1;
+        if (usage.costStatus === "unpriced") runsWithPartialReportedCost += 1;
         reportedCostUsd += costUsd;
       }
     }
   }
   const runCount = Math.max(requestedRunCount, entries.length);
-  const costStatus = costCoverageStatus(runCount, runsWithTokenUsage, runsWithReportedCost, runsWithEstimatedCost);
+  const costStatus = costCoverageStatus(runCount, runsWithTokenUsage, runsWithReportedCost, runsWithEstimatedCost, runsWithPartialReportedCost);
   const runtime = fallbackRuntimeUsage(result);
   const estimatedRuntimeCostUsd = runtime.estimatedListCostUsd ?? 0;
   const judgments = [...(result.firstTaskQuality ? [result.firstTaskQuality] : []), ...(result.completionQuality ?? [])];
   const sumKnown = (key: "inputTokens" | "outputTokens" | "estimatedCostUsd") => judgments.some(q => q[key] === null) ? null : judgments.reduce((sum, q) => sum + (q[key] ?? 0), 0);
   const quality = judgments.length ? { inputTokens: sumKnown("inputTokens"), outputTokens: sumKnown("outputTokens"), estimatedCostUsd: sumKnown("estimatedCostUsd"), reservedCostUsd: judgments.reduce((sum, q) => sum + q.reservedCostUsd, 0) } : undefined;
   const complete =
-    !incompleteReceipt &&
+    !incompleteReceipt && runsWithPartialReportedCost === 0 &&
     (!quality || quality.estimatedCostUsd !== null) &&
     runsWithTokenUsage === runCount &&
     runsWithReportedCost + runsWithEstimatedCost === runCount &&
@@ -335,6 +339,7 @@ export function summarizeExecutionBilling(
       runsWithTokenUsage,
       runsWithReportedCost,
       runsWithEstimatedCost,
+      runsWithPartialReportedCost,
       inputTokens,
       outputTokens,
       cachedInputTokens,
@@ -382,6 +387,7 @@ export function aggregateBillingSummaries(
     0,
   );
   const runsWithEstimatedCost = summaries.reduce((sum, summary) => sum + (summary.llm.runsWithEstimatedCost ?? 0), 0);
+  const runsWithPartialReportedCost = summaries.reduce((sum, summary) => sum + (summary.llm.runsWithPartialReportedCost ?? 0), 0);
   const estimatedLlmCostUsd = summaries.reduce((sum, summary) => sum + (summary.llm.estimatedCostUsd ?? 0), 0);
   const estimatedRuntimeCostUsd = summaries.reduce(
     (total, summary) => total + summary.estimatedRuntimeCostUsd,
@@ -419,6 +425,7 @@ export function aggregateBillingSummaries(
       runsWithTokenUsage,
       runsWithReportedCost,
       runsWithEstimatedCost,
+      runsWithPartialReportedCost,
       inputTokens: summaries.reduce(
         (total, summary) => total + summary.llm.inputTokens,
         0,
@@ -437,7 +444,7 @@ export function aggregateBillingSummaries(
       ),
       reportedCostUsd: reportedLlmCostUsd,
       estimatedCostUsd: estimatedLlmCostUsd,
-      costStatus: costCoverageStatus(runCount, runsWithTokenUsage, runsWithReportedCost, runsWithEstimatedCost),
+      costStatus: costCoverageStatus(runCount, runsWithTokenUsage, runsWithReportedCost, runsWithEstimatedCost, runsWithPartialReportedCost),
     },
     reportedLlmCostUsd,
     estimatedLlmCostUsd,

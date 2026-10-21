@@ -376,7 +376,7 @@ async function main() {
       : []),
     `Tokens: ${billingCoverageLabel(`${billing.llm.inputTokens} input / ${billing.llm.outputTokens} output / ${billing.llm.cachedInputTokens} cached`, billing.llm.runsWithTokenUsage, billing.llm.runCount)}`,
     "",
-    `Provider-reported LLM cost: ${billingCoverageLabel(`$${billing.reportedLlmCostUsd.toFixed(6)}`, billing.llm.runsWithReportedCost, billing.llm.runCount)}`,
+    `Provider-reported LLM cost: ${billingCoverageLabel(`$${billing.reportedLlmCostUsd.toFixed(6)}`, billing.llm.runsWithReportedCost, billing.llm.runCount, (billing.llm.runsWithPartialReportedCost ?? 0) > 0)}`,
     `Estimated LLM cost: ${billingCoverageLabel(`$${(billing.estimatedLlmCostUsd ?? 0).toFixed(6)}`, billing.llm.runsWithEstimatedCost ?? 0, billing.llm.runCount)}`,
     `Accounting: ${campaign.accounting!.attempts.length} retained attempts; ${campaign.accounting!.missingAttempts} missing attempts; ${campaign.accounting!.excludedArtifacts} out-of-scope artifacts excluded. Costs cover captured usage, not unobserved setup or external charges.`,
     "",
@@ -395,7 +395,7 @@ async function main() {
       const cell = publicCampaignUrl
         ? `[${resolved.executionId}](${publicCampaignUrl}#execution-${encodeURIComponent(resolved.executionId)})`
         : resolved.executionId;
-      return `| ${cell} | ${resolved.attempt} | ${entry.valid ? "pass" : "fail"} | ${resolved.runtimeMode} | ${Math.round(resolved.durationMs / 1000)}s | ${billingCoverageLabel(`${cellBilling.llm.inputTokens}/${cellBilling.llm.outputTokens}`, cellBilling.llm.runsWithTokenUsage, cellBilling.llm.runCount)} | ${billingCoverageLabel(`$${cellBilling.reportedCostUsd.toFixed(6)}`, cellBilling.llm.runsWithReportedCost, cellBilling.llm.runCount)} | ${runtimeCost === undefined ? cellBilling.runtime.costStatus : `$${runtimeCost.toFixed(6)} est.`} | ${detail} |`;
+      return `| ${cell} | ${resolved.attempt} | ${entry.valid ? "pass" : "fail"} | ${resolved.runtimeMode} | ${Math.round(resolved.durationMs / 1000)}s | ${billingCoverageLabel(`${cellBilling.llm.inputTokens}/${cellBilling.llm.outputTokens}`, cellBilling.llm.runsWithTokenUsage, cellBilling.llm.runCount)} | ${billingCoverageLabel(`$${cellBilling.reportedCostUsd.toFixed(6)}`, cellBilling.llm.runsWithReportedCost, cellBilling.llm.runCount, (cellBilling.llm.runsWithPartialReportedCost ?? 0) > 0)} | ${runtimeCost === undefined ? cellBilling.runtime.costStatus : `$${runtimeCost.toFixed(6)} est.`} | ${detail} |`;
     }),
     "",
   ];

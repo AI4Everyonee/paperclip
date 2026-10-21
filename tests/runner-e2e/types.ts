@@ -264,6 +264,7 @@ export interface RunnerE2EBillingSummary {
     runsWithTokenUsage: number;
     runsWithReportedCost: number;
     runsWithEstimatedCost?: number;
+    runsWithPartialReportedCost?: number;
     inputTokens: number;
     outputTokens: number;
     cachedInputTokens: number;
@@ -273,7 +274,6 @@ export interface RunnerE2EBillingSummary {
     costStatus: Exclude<RunnerE2ECostStatus, "not_metered">;
   };
   runtime: RunnerE2ERuntimeUsage;
-  /** Provider-reported model spend only; never includes unknown/unpriced runs. */
   reportedCostUsd: number;
   /** Public-list-price estimate for metered execution infrastructure. */
   estimatedRuntimeCostUsd: number;

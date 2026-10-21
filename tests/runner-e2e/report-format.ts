@@ -23,7 +23,7 @@ export function tokenLabel(value: number, llm?: RunnerE2EBillingSummary["llm"]) 
 }
 
 export function llmCostLabel(value: number, llm: RunnerE2EBillingSummary["llm"]) {
-  return billingCoverageLabel(usdLabel(value), llm.runsWithReportedCost, llm.runCount);
+  return billingCoverageLabel(usdLabel(value), llm.runsWithReportedCost, llm.runCount, (llm.runsWithPartialReportedCost ?? 0) > 0);
 }
 
 export function usdLabel(value: number | null) {

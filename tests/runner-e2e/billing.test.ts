@@ -6,6 +6,7 @@ import {
   summarizeExecutionBilling,
 } from "./billing.js";
 import type { RunnerE2EResult } from "./types.js";
+import { llmCostLabel } from "./report-format.js";
 
 function result(overrides: Partial<RunnerE2EResult> = {}): RunnerE2EResult {
   return {
@@ -54,6 +55,18 @@ describe("runner E2E billing summaries", () => {
     expect(partial.reportedCostUsd).toBe(0.01);
     expect(partial.complete).toBe(false);
     expect(summarizeExecutionBilling(result({ usage: null })).complete).toBe(false);
+  });
+  it("retains a known OpenCode retry subtotal while the missing turn price stays incomplete", () => {
+    const partial = result({ usage: { inputTokens: 30, outputTokens: 6, costUsd: 0.5, costStatus: "unpriced", accountingReceiptReady: true } });
+    const billing = summarizeExecutionBilling(partial);
+    expect(billing.llm).toMatchObject({ reportedCostUsd: 0.5, runsWithReportedCost: 1, runsWithPartialReportedCost: 1, costStatus: "partial" });
+    expect(billing.observedAndEstimatedCostUsd).toBe(0.5);
+    expect(billing.complete).toBe(false);
+    expect(llmCostLabel(billing.reportedCostUsd, billing.llm)).toBe("$0.5000 (partial amount)");
+    const campaign = aggregateCampaignBilling([partial, result({ executionId: "other", usage: { inputTokens: 1, outputTokens: 1, costUsd: 0.2 } })]);
+    expect(campaign).toMatchObject({ reportedLlmCostUsd: 0.7, observedAndEstimatedCostUsd: 0.7, testsWithCompleteBilling: 1,
+      llm: { runsWithReportedCost: 2, runsWithPartialReportedCost: 1, costStatus: "partial" } });
+    expect(llmCostLabel(campaign.reportedLlmCostUsd, campaign.llm)).toBe("$0.7000 (partial amount)");
   });
   it("counts completion judge reservations and preserves unknown spend after interruption", () => {
     const pending = { ...reserveCompletionQuality({ sourceId: "chat", marker: "x", worker: { id: "task", status: "done", completedAt: "2026-09-01" }, documents: [{ id: "doc", issueId: "task", body: "result" }], comments: [{ id: "reply", issueId: "chat", authorAgentId: "agent", createdAt: "2026-09-02", body: "ready" }], runs: [] }, 0.5), name: "completion", expectedPass: true };
