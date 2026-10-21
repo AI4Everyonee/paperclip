@@ -7,6 +7,7 @@ import { evalRequestReservation, startEvalGateway, type EvalGatewayRoute, type E
 import type { MatrixExecution } from "./types.js";
 import { evalBraintrustConfig } from "./braintrust.js";
 import { startEvalOtlpRelay } from "./eval-otlp-relay.js";
+import { usdToUnits } from "../../packages/shared/src/money.js";
 
 export interface EvalOperationsManifest {
   version: 1;
@@ -23,7 +24,8 @@ const fields = (value: object, names: string[]) => {
 };
 export function validateEvalOperationsManifest(value: EvalOperationsManifest, executions: readonly MatrixExecution[], maxRetries: number) {
   fields(value, ["version", "limits", "ledgerPath", "executionIds", "maxAttemptsPerExecution", "route", "projectId", "models"]);
-  new EvalSpendState(value.limits);
+  const initial = new EvalSpendState(value.limits).snapshot();
+  const initialModelAllowance = usdToUnits(value.limits.maxUsd) - usdToUnits(initial.committedUsd);
   if (value.version !== 1 || !["direct", "braintrust"].includes(value.route) || !path.isAbsolute(value.ledgerPath)
       || !Array.isArray(value.executionIds) || new Set(value.executionIds).size !== value.executionIds.length
       || JSON.stringify([...value.executionIds].sort()) !== JSON.stringify(executions.map(e => e.id).sort())
@@ -31,7 +33,7 @@ export function validateEvalOperationsManifest(value: EvalOperationsManifest, ex
       || value.limits.maxAttemptsPerExecution !== undefined && value.limits.maxAttemptsPerExecution !== value.maxAttemptsPerExecution
       || maxRetries + 1 > value.maxAttemptsPerExecution || !Array.isArray(value.models) || value.models.length === 0) throw new Error("Eval operations selection or limits mismatch");
   if (value.route === "braintrust" && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.projectId ?? "")) throw new Error("Braintrust gateway requires an explicit project UUID");
-  const models = new Set<string>();
+  const models = new Map<string, bigint>();
   for (const model of value.models) {
     fields(model, ["provider", "price", "maximumInputTokens", "maximumOutputTokens", "timeoutMs"]);
     const rateFields = ["inputUsdPerMillion", "cachedReadUsdPerMillion", "outputUsdPerMillion", "cacheWrite5mUsdPerMillion", "cacheWrite1hUsdPerMillion", "cacheWrite30mUsdPerMillion", "cacheWrite12hUsdPerMillion"];
@@ -40,8 +42,8 @@ export function validateEvalOperationsManifest(value: EvalOperationsManifest, ex
     const url = new URL(model.price.sourceUrl);
     if (!["openai", "anthropic"].includes(model.provider) || url.protocol !== "https:" || url.username || url.password || url.search || url.hash) throw new Error("Invalid model price provenance");
     const key = `${model.provider}:${model.price.model}`;
-    if (models.has(key)) throw new Error("Duplicate eval model price"); models.add(key);
-    evalRequestReservation({ ...model, mode: value.route, apiKey: "validation" });
+    if (models.has(key)) throw new Error("Duplicate eval model price");
+    models.set(key, usdToUnits(evalRequestReservation({ ...model, mode: value.route, apiKey: "validation" })));
   }
   for (const execution of executions) {
     if (execution.environment.id !== "local" || !["core-compatibility", "feedback-persistence"].includes(execution.suite.id)
@@ -49,6 +51,9 @@ export function validateEvalOperationsManifest(value: EvalOperationsManifest, ex
         || execution.requiredCredentials.length !== 1) throw new Error(`Unqualified budgeted eval route: ${execution.id}`);
     const provider = execution.profile.credential === "ANTHROPIC_API_KEY" ? "anthropic" : "openai";
     if (!models.has(`${provider}:${execution.profile.model}`)) throw new Error(`Missing exact model pricing: ${execution.id}`);
+    if (models.get(`${provider}:${execution.profile.model}`)! > initialModelAllowance) {
+      throw new Error(`Insufficient initial model allowance for selected eval: ${execution.id}`);
+    }
   }
   return value;
 }

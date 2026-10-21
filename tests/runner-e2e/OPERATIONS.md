@@ -18,6 +18,12 @@ subscription profiles, hosted tools, multimodal inputs, premium service modes,
 and separate judges fail admission. This whitelist is implementation scope, not
 evidence that every admitted harness has passed live qualification.
 
+Before creating the journal or requesting credentials, manifest validation checks
+that every selected model's worst-case single-request reservation fits the initial
+campaign allowance after declared operating holds. Prices for unused models do
+not affect this selection check. Passing it does not promise the whole campaign
+will fit: later requests still use the journal's current commitments and limits.
+
 The launcher owns one loopback HTTP gateway per attempt. The real provider key
 stays in the parent launcher. Playwright receives an ephemeral token, and fixture
 setup saves that token through a shared AI connection with the existing custom

@@ -33,6 +33,32 @@ it("rejects credentials in the manifest and unknown pricing/billing policy field
   expect(() => validateEvalOperationsManifest(changed, [cell], 0)).toThrow("fields");
   expect(() => validateEvalOperationsManifest({ ...manifest(), route: "braintrust" }, [cell], 0)).toThrow("project UUID");
 });
+
+it("rejects an unaffordable selected request before opening a ledger or checking credentials", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "eval-unaffordable-preflight-"));
+  try {
+    const value = manifest(); value.limits.maxUsd = "0.002999999"; value.ledgerPath = path.join(root, "ledger.jsonl");
+    const file = path.join(root, "manifest.json"); await writeFile(file, JSON.stringify(value));
+    await expect(openEvalOperations(file, [cell], 0, {})).rejects.toThrow("Insufficient initial model allowance");
+    await expect(access(value.ledgerPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(access(`${value.ledgerPath}.requests`)).rejects.toMatchObject({ code: "ENOENT" });
+    value.limits.maxUsd = "0.003";
+    expect(validateEvalOperationsManifest(value, [cell], 0)).toBe(value);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+it("subtracts declared operating holds and checks only models used by the selection", () => {
+  const value = manifest(); value.limits.maxUsd = "0.007"; value.limits.maxAttemptsPerExecution = 2;
+  value.limits.overhead = { version: 1, reference: "fixture", runner: "github-hosted",
+    verifiedAt: "2026-10-20T00:00:00Z", expiresAt: "2026-11-19T00:00:00Z",
+    components: (["ci_compute", "artifact_storage", "observability", "shared_subscription"] as const).map(component => ({
+      component, maxUsd: "0.001", reference: "fixture" })) };
+  value.models.push({ ...structuredClone(value.models[0]!), maximumInputTokens: 1_000_000,
+    price: { ...value.models[0]!.price, model: "unused-model" } });
+  expect(validateEvalOperationsManifest(value, [cell], 0)).toBe(value);
+  value.limits.maxUsd = "0.006999999";
+  expect(() => validateEvalOperationsManifest(value, [cell], 0)).toThrow("Insufficient initial model allowance");
+});
 it("retains a campaign summary and refuses changing its budget on restart", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "eval-ops-test-"));
   try {
