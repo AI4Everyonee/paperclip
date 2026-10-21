@@ -1837,7 +1837,7 @@ describe("agent permission routes", () => {
 
   for (const adapterCase of sshCapableAdapterCases) {
     it(`allows creating a ${adapterCase.adapterType} agent with an SSH default environment`, async () => {
-      const expectedAdapterType = ["codex_local", "claude_local", "opencode_local"].includes(adapterCase.adapterType) ? "paperclip_runner" : adapterCase.adapterType;
+      const expectedAdapterType = ["codex_local", "claude_local", "opencode_local", "pi_local"].includes(adapterCase.adapterType) ? "paperclip_runner" : adapterCase.adapterType;
       const environmentId = "33333333-3333-4333-8333-333333333333";
       mockEnvironmentService.getById.mockResolvedValue({
         id: environmentId,
@@ -1879,9 +1879,10 @@ describe("agent permission routes", () => {
         }),
         { runnerResolved: true, aiConnectionInstall: undefined, createdByUserId: "board-user", responsibleUserId: "board-user", claudeLogin: { storedSessionId: null, ownerUserId: "board-user", applyExistingWithoutClaim: false } },
       );
-      if (["codex_local", "claude_local", "opencode_local"].includes(adapterCase.adapterType)) {
+      if (["codex_local", "claude_local", "opencode_local", "pi_local"].includes(adapterCase.adapterType)) {
         if (adapterCase.adapterType === "codex_local") expect(mockAgentService.create.mock.calls[0][1].adapterConfig).toMatchObject({ provider: "codex" });
         else if (adapterCase.adapterType === "opencode_local") expect(mockAgentService.create.mock.calls[0][1].adapterConfig).toMatchObject({ provider: "opencode", model: adapterCase.adapterConfig.model });
+        else if (adapterCase.adapterType === "pi_local") expect(mockAgentService.create.mock.calls[0][1].adapterConfig).toMatchObject({ provider: "acpx", acpxAgent: "pi", model: adapterCase.adapterConfig.model });
         else expect(mockAgentService.create.mock.calls[0][1].adapterConfig).toMatchObject({ provider: "acpx", acpxAgent: "claude", model: "claude-opus-5-5" });
         const { AGENT_RUNNER_SSH_PLATFORM_COMMAND } = await import("../services/agent-runner-selection.js");
         expect(mockRunSshCommand).toHaveBeenCalledWith(expect.objectContaining({ host: "qa.example.invalid" }), AGENT_RUNNER_SSH_PLATFORM_COMMAND, { timeoutMs: 10_000 });

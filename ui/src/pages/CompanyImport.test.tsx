@@ -1227,6 +1227,26 @@ describe("CompanyImport", () => {
     expect(lastImportMeta().adapterOverrides?.coder).toBeUndefined();
   });
 
+  it("keeps native Pi identity and saved policies with the experimental flag off", async () => {
+    mockAdaptersApi.list.mockResolvedValue([
+      { type: "claude_local", disabled: false },
+      { type: "pi_local", disabled: false, supportedRunners: ["paperclip", "legacy"], defaultRunner: "paperclip" },
+      { type: "paperclip_runner", disabled: false },
+    ]);
+    const preview = buildMixedAdapterPreviewResult();
+    preview.manifest.agents[0]!.adapterType = "paperclip_runner";
+    preview.manifest.agents[0]!.adapterConfig = { provider: "acpx", acpxAgent: "pi", model: "provider/model", piThinkingLevel: "max", acpxPermissionMode: "approve-reads", lifecycleMode: "warm" };
+    mockCompaniesApi.importPreview.mockResolvedValue(preview);
+    await renderPage();
+    await enterGithubUrl();
+    await clickButton(text => text === "Preview import");
+    expect(findAdapterSelects()[0]!.value).toBe("pi_local");
+    expect(container.textContent).not.toContain("requires its experimental feature to be enabled");
+    await clickButton(text => text.startsWith("Import 3 file"));
+    await settle();
+    expect(lastImportMeta().adapterOverrides?.coder).toBeUndefined();
+  });
+
   it.each([
     { sourceType: "codex_local", sourceRunner: "legacy" as const, runner: "paperclip" as const, sourcePolicy: {}, expectedBypass: undefined },
     { sourceType: "codex_local", sourceRunner: undefined, runner: "legacy" as const, sourcePolicy: { dangerouslyBypassApprovalsAndSandbox: false }, expectedBypass: false },
