@@ -50,6 +50,28 @@ test("disabled gates do not query or diagnose old paid campaigns", async () => {
   assert.equal(f.calls.length, 1);
 });
 
+for (const budgetGate of [undefined, "false"]) test(`an enabled legacy schedule with ${budgetGate ?? "missing"} budget gate alerts once`, async () => {
+  const rows = [{ name: "RUNNER_FULL_STACK_E2E_NIGHTLY_ENABLED", value: "true" }];
+  if (budgetGate !== undefined) rows.push({ name: "RUNNER_FULL_STACK_E2E_OPERATIONS_ENABLED", value: budgetGate });
+  const f = fixture({ variables: { total_count: rows.length, variables: rows } });
+  const inspection = await inspectEvalSchedule({ ...f, now });
+  assert.equal(inspection.status, "configuration_incomplete");
+  assert.equal(inspection.reason, "legacy_schedule_enabled_without_budget_gate");
+  assert.equal(f.calls.length, 1);
+  const first = monitorTransition(undefined, inspection);
+  assert.equal(first.notifications.length, 1);
+  assert.equal(first.notifications[0].kind, "problem");
+  assert.deepEqual(monitorTransition(first, inspection).notifications, first.notifications);
+});
+
+test("an explicitly disabled legacy gate stays quiet even if the new budget gate is enabled", async () => {
+  const changed = structuredClone(variables); changed.variables[1].value = "false";
+  const f = fixture({ variables: changed });
+  const inspection = await inspectEvalSchedule({ ...f, now });
+  assert.equal(inspection.status, "disabled"); assert.equal(f.calls.length, 1);
+  assert.deepEqual(monitorTransition(undefined, inspection).notifications, []);
+});
+
 test("missing activation time and a disabled workflow stay distinct from missing runs", async () => {
   const invalid = structuredClone(variables); invalid.variables[2].value = "not a date";
   assert.equal((await inspectEvalSchedule({ ...fixture({ variables: invalid }), now })).status, "configuration_incomplete");

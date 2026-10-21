@@ -36,9 +36,12 @@ export async function inspectEvalSchedule({ get, now = Date.now() }) {
     if (!Array.isArray(variables.variables) || !Number.isSafeInteger(variables.total_count)
       || variables.total_count !== variables.variables.length) throw new Error("Incomplete variables");
     const values = Object.fromEntries(variables.variables.map(row => [row.name, row.value]));
-    if (values.RUNNER_FULL_STACK_E2E_OPERATIONS_ENABLED !== "true"
-      || values.RUNNER_FULL_STACK_E2E_NIGHTLY_ENABLED !== "true") {
+    if (values.RUNNER_FULL_STACK_E2E_NIGHTLY_ENABLED !== "true") {
       return { observedAt: new Date(now).toISOString(), status: "disabled", observations: [] };
+    }
+    if (values.RUNNER_FULL_STACK_E2E_OPERATIONS_ENABLED !== "true") {
+      return { observedAt: new Date(now).toISOString(), status: "configuration_incomplete",
+        reason: "legacy_schedule_enabled_without_budget_gate", observations: [] };
     }
     const enabledAt = Date.parse(values.RUNNER_FULL_STACK_E2E_OPERATIONS_ENABLED_AT ?? "");
     if (!Number.isFinite(enabledAt) || enabledAt > now) {

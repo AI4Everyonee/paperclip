@@ -153,6 +153,13 @@ when recurrence is enabled. Missing activation time fails visibly; occurrences
 before activation are not treated as missed. Workflow run titles carry the
 literal cron expression to distinguish daily and weekly runs, including Sunday.
 
+Only the legacy `RUNNER_FULL_STACK_E2E_NIGHTLY_ENABLED` gate being off establishes
+disabled recurrence. If that gate is on while the operations gate is absent or
+off, the observer reports `configuration_incomplete` and retains one incident
+notification. Older deployed workflows use only the legacy gate, so a missing
+new gate must not imply that those paid schedules are disabled. Verify the
+deployed default-branch workflow and both variables before enabling recurrence.
+
 The observer allows 90 minutes for schedule delay. It checks the most recent due
 occurrence per cadence, marks a run overdue after four hours, and requires a
 successful terminal run plus a nonempty, unexpired merged-report artifact.
