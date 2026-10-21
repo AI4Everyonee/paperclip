@@ -1,5 +1,6 @@
 import { openEvalOperations, type EvalOperations } from "./operations.js";
 import { readRecoveredFeedback } from "./feedback-recovery.js";
+import { readInterruptedAttemptTrace } from "./trace-recovery.js";
 import { EVAL_OBSERVABILITY_SECRET_NAMES, evalBraintrustConfig, finalizeEvalAttemptTrace } from "./braintrust.js";
 import { runnerE2EPlaywrightInvocation, runnerE2EPlaywrightShutdownSignal } from "./web-server-command.js";
 import { verifyInstalledDaytonaPlugin } from "./installed-daytona-plugin.js";
@@ -674,6 +675,9 @@ async function runAttempt(input: {
         if (result === fallback) {
           result.feedback = await readRecoveredFeedback(path.dirname(resultPath), {
             campaignId: accountingCampaignId, attemptId: accountingAttemptId, executionId: candidate.id,
+          });
+          if (traceConfig) result.tracing = await readInterruptedAttemptTrace(path.dirname(resultPath), {
+            projectId: traceConfig.projectId, executionId: candidate.id,
           });
         }
         // Keep cleanup authority before evidence copying/publication can fail.

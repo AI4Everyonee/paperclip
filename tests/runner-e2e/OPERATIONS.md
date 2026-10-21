@@ -320,6 +320,10 @@ Playwright handles that signal by stopping workers and closing its web server;
 SIGTERM can exit before web-server cleanup. The web-server supervisor still
 receives SIGTERM and owns its server's shutdown. Both paths retain the existing
 bounded grace period and forced cleanup for surviving owned processes.
+When a worker exits without a result, the launcher also recovers its original
+trace identity from the private fixture snapshots. The supervisor can finalize
+that trace with the failed outcome. A mismatched project, execution or company
+is rejected. Recovered identity does not prove native export or complete phases.
 
 If a worker exits before writing its result, the server supervisor spends at
 most five seconds collecting feedback from that attempt's saved company before
