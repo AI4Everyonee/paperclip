@@ -116,11 +116,39 @@ gaps remain open; Product E2E qualification does not close them.
 
 ## Missing campaign detection
 
-Workflow failure notifications cover runs that start. A separate observer must
-check both the expected start and terminal report, with a grace window for
-GitHub scheduling delay, and retain the last successfully inspected run ID.
-It must distinguish disabled recurrence, no run, still running, failed run,
-missing report, and an unavailable Actions API. It must never launch or retry
-paid work. Notify once for a new actionable state or recovery; healthy unchanged
-runs stay quiet. Until that observer is configured and exercised, missed-run
-detection is an explicit activation gap.
+Workflow failure notifications cover runs that start. The independent observer
+is `scripts/eval-schedule-monitor.mjs`. Run it through a separate host with an
+authenticated GitHub CLI and one private state file:
+
+```sh
+node scripts/eval-schedule-monitor.mjs "$HOME/.config/paperclip-evals/schedule-monitor.json"
+```
+
+The observer uses only GitHub GET requests. It never starts or retries paid
+work and does not need provider credentials. It reads the two existing enable
+gates plus `RUNNER_FULL_STACK_E2E_OPERATIONS_ENABLED_AT`, an ISO timestamp set
+when recurrence is enabled. Missing activation time fails visibly; occurrences
+before activation are not treated as missed. Workflow run titles carry the
+literal cron expression to distinguish daily and weekly runs, including Sunday.
+
+The observer allows 90 minutes for schedule delay. It checks the most recent due
+occurrence per cadence, marks a run overdue after four hours, and requires a
+successful terminal run plus a nonempty, unexpired merged-report artifact.
+The workflow's finalizer remains responsible for checking report content and
+accounting. Metadata inspection does not repeat that validation. Unexpected
+reruns, ambiguous matching runs, incomplete API lists and API failures remain
+visible. The observer reads at most 100 rows per collection and fails closed
+if a response is truncated.
+
+Retained state includes the last successful inspection and inspected run IDs.
+`notifications` contains new problems and recovery transitions; the same
+unchanged problem does not alert again. A new missed occurrence is a new
+incident. Disabled recurrence and unchanged healthy runs are quiet. Use one
+writer per state file; do not reset it to clear an incident. A malformed state
+file fails rather than discarding notification history. The external host owns
+delivery of these notifications and monitoring its own liveness.
+
+Schedule this observer outside the paid workflow after source and recurrence
+are ready. It should inspect at least daily, after both scheduled start times
+and their grace windows. Until that external trigger and notification delivery
+are configured and exercised, missed-run detection remains an activation gap.

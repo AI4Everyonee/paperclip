@@ -1,4 +1,5 @@
 name: Runner Full-Stack E2E
+run-name: Runner Full-Stack E2E / ${{ github.event.schedule || inputs.cadence || 'manual' }}
 
 on:
   schedule:
