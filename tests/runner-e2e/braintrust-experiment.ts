@@ -114,7 +114,7 @@ export interface BraintrustExperimentReceipt {
 export function experimentEvidenceHash(campaign: RunnerE2ECampaign) {
   return digest({ campaignId: campaign.campaignId, expected: [...campaign.expected].sort(),
     selected: campaign.results.map(result => ({ executionId: result.executionId, accountingIdentity: result.accountingIdentity,
-      attempt: result.attempt, startedAt: result.startedAt, sourceRevision: result.source?.sha ?? null,
+      attempt: result.attempt, startedAt: result.attempt === 0 ? null : result.startedAt, sourceRevision: result.source?.sha ?? null,
       suiteDefinitionHash: result.suiteDefinitionHash ?? null, suiteId: result.suiteId, profileId: result.profileId,
       caseId: result.caseId, provider: result.provider, model: result.model, environmentId: result.environmentId,
       runtimeMode: result.runtimeMode })).sort((a, b) => digest(a).localeCompare(digest(b))),
