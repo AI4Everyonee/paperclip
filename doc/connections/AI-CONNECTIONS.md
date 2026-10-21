@@ -834,3 +834,17 @@ updates, account changes, duplicate identity resolution, ownership, monetary
 receipt replay, unknown prices, and failed provider observations. Provider payloads
 are fixtures; live provider access still depends on the deployment's credentials
 and scopes.
+
+### Login completion ownership
+
+The internal connection save service takes an internal auth-session row ID for
+every login flow. The setup-token owner resolves its public session ID within
+the company, user, and adapter scope before calling save. Local and device
+logins already use internal IDs. Provider names do not select the ID column.
+
+A login flow can supply a completion callback that runs inside the connection
+save transaction, after the session binding is written. Setup-token completion
+uses its existing conditional transition to `stored`; a rejected transition
+rolls back the credentials and connection binding. Already-bound sessions return
+the existing connection without repeating the callback. Local and device login
+services continue to own their final states.
