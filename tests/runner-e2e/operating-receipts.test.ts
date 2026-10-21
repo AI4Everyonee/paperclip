@@ -1,11 +1,17 @@
 import { createHash } from "node:crypto";
 import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import * as fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { openEvalCostLedger, readEvalCostLedger } from "./cost-ledger.js";
 import { EVAL_OVERHEAD_COMPONENTS, type EvalOperatingOverhead } from "./operating-overhead.js";
 import { importOperatingReceipt, operatingReceiptObservation, type EvalOperatingReceipt } from "./operating-receipts.js";
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof fs>();
+  return { ...actual, open: vi.fn(actual.open) };
+});
 
 const evidence = Buffer.from("fixture-only infrastructure receipt");
 const overhead: EvalOperatingOverhead = { version: 1, runner: "github-hosted", reference: "fixture-allowance",
@@ -78,4 +84,29 @@ it("fails before ledger mutation when retained evidence is corrupt or another wr
     finally { await writer.close(); }
     expect(await readFile(ledgerPath, "utf8")).toBe(before);
   } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+it("retains the hold when the first evidence directory cannot be persisted in its parent", async () => {
+  const { directory, ledgerPath } = await fixture();
+  const before = await readFile(ledgerPath, "utf8"), originalOpen = (await vi.importActual<typeof fs>("node:fs/promises")).open;
+  let parentSyncs = 0;
+  const opened = vi.mocked(fs.open).mockImplementation(async (...args) => {
+    const handle = await originalOpen(...args);
+    if (args[0] === directory && args[1] === "r") {
+      vi.spyOn(handle, "sync").mockImplementation(async () => {
+        parentSyncs++;
+        throw new Error("fixture parent directory sync failure");
+      });
+    }
+    return handle;
+  });
+  try {
+    await expect(importOperatingReceipt(ledgerPath, receipt(), evidence)).rejects.toThrow("parent directory sync failure");
+    expect(parentSyncs).toBe(1);
+    expect(await readFile(ledgerPath, "utf8")).toBe(before);
+    expect((await readEvalCostLedger(ledgerPath)).state.snapshot()).toMatchObject({ knownUsd: "0.000000000", heldUsd: "4.000000000" });
+  } finally {
+    opened.mockImplementation(originalOpen);
+    await rm(directory, { recursive: true, force: true });
+  }
 });

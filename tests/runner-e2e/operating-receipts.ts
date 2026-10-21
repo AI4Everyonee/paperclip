@@ -74,8 +74,10 @@ export async function importOperatingReceipt(ledgerPath: string, receipt: EvalOp
     await mkdir(directory, { recursive: true, mode: 0o700 });
     await retain(path.join(directory, `${receipt.evidenceSha256}.evidence`), evidence);
     await retain(path.join(directory, `${observation.observationId.split(":")[1]}.receipt.json`), Buffer.from(`${JSON.stringify(canonical(receipt), null, 2)}\n`));
-    const directoryHandle = await open(directory, "r");
-    try { await directoryHandle.sync(); } finally { await directoryHandle.close(); }
+    for (const durableDirectory of [directory, path.dirname(directory)]) {
+      const directoryHandle = await open(durableDirectory, "r");
+      try { await directoryHandle.sync(); } finally { await directoryHandle.close(); }
+    }
     if (!(await readEvalCostLedger(ledgerPath)).state.observations.has(observation.observationId)) await ledger.observe(observation);
     return ledger.snapshot();
   } finally { await ledger.close(); }
