@@ -54,7 +54,7 @@ describe("resolveNativeRuntimeMode", () => {
     expect(resolveNativeRuntimeMode({ ...eligible, enabled: false,
       adapterConfig: { provider: "acpx", acpxAgent: "copilot", model: "gpt-5.6-luna" },
     })).toMatchObject({ kind: "native", profile: { backend: "acpx_runtime" } });
-    for (const acpxAgent of ["pi", "cursor", "codex"]) {
+    for (const acpxAgent of ["grok", "cursor", "codex"]) {
       expect(() => resolveNativeRuntimeMode({ ...eligible, enabled: false,
         adapterConfig: { provider: "acpx", acpxAgent, model: "gpt-5.6-luna" },
       })).toThrow(expect.objectContaining({ code: "paperclip_runner_rollout_disabled" }));
@@ -96,14 +96,20 @@ describe("resolveNativeRuntimeMode", () => {
     })).toMatchObject({ kind: "native", profile: { backend: "opencode_server" } });
   });
 
-  it("still rejects Pi while the rollout flag is disabled", () => {
+  it("still rejects Grok while the rollout flag is disabled", () => {
     expect(() => resolveNativeRuntimeMode({
       ...eligible,
       enabled: false,
-      adapterConfig: { provider: "acpx", acpxAgent: "pi", model: "openrouter/deepseek/deepseek-v4-flash-0731" },
+      adapterConfig: { provider: "acpx", acpxAgent: "grok", model: "openrouter/deepseek/deepseek-v4-flash-0731" },
     })).toThrow(expect.objectContaining({
       code: "paperclip_runner_rollout_disabled",
     }));
+  });
+
+  it("admits Pi without the generic rollout flag", () => {
+    expect(resolveNativeRuntimeMode({ ...eligible, enabled: false,
+      adapterConfig: { provider: "acpx", acpxAgent: "pi", model: "openrouter/anthropic/claude-sonnet-4.6", piThinkingLevel: "max" },
+    })).toMatchObject({ kind: "native", profile: { backend: "acpx_runtime" } });
   });
 
   it("rejects unknown Paperclip Runner providers", () => {
@@ -250,7 +256,7 @@ describe("resolveNativeRuntimeMode", () => {
 
   it("keeps a persisted experimental run native while the flag rejects a fresh start", () => {
     const disabled = { ...eligible, enabled: false,
-      adapterConfig: { provider: "acpx", acpxAgent: "pi", model: "openrouter/deepseek/deepseek-v4-flash-0731" },
+      adapterConfig: { provider: "acpx", acpxAgent: "grok", model: "openrouter/deepseek/deepseek-v4-flash-0731" },
     };
     expect(resolveHeartbeatNativeRuntimeMode({
       ...disabled,
@@ -522,7 +528,7 @@ describe("resolveHeartbeatRuntimeMode compatibility", () => {
       ...compatibilityInput,
       enabled: false,
       adapterType: "paperclip_runner",
-      adapterConfig: { provider: "acpx", acpxAgent: "pi", model: "openrouter/anthropic/claude-sonnet-4.6" },
+      adapterConfig: { provider: "acpx", acpxAgent: "grok", model: "openrouter/anthropic/claude-sonnet-4.6" },
     })).toThrow(NativeRunnerSelectionError);
   });
   it("admits native Claude without enabling other ACPX providers", () => {
