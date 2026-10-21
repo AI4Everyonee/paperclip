@@ -1,7 +1,3 @@
-// OTLP v1.9.0 field definitions, OpenTelemetry Authors, Apache-2.0.
-// Source: https://github.com/open-telemetry/opentelemetry-proto/tree/v1.9.0
-// https://www.apache.org/licenses/LICENSE-2.0
-// Keep all fields: cost sizing must not decode only the routing attributes.
 import { createRequire } from "node:module";
 const require = createRequire(new URL("../../server/package.json", import.meta.url));
 export const protobuf = require("protobufjs") as typeof import("../../server/node_modules/protobufjs/index.js");

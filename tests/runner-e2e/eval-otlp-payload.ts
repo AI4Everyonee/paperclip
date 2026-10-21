@@ -77,9 +77,6 @@ export function validateEvalOtlpPayload(body: Buffer, contentType: string, signa
   return { body: contentType === "application/json" ? canonical : body, ...sizing };
 }
 
-// Local source-data measurement, not Braintrust's processed-data meter. Count
-// the complete source plus a standalone envelope per record so shared resource
-// and scope metadata cannot hide arbitrary expansion behind a small wire body.
 function expandedEvalOtlpSize(decoded: Record<string, unknown>, signal: EvalOtlpSignal) {
   const bytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
   const object = (value: unknown): Record<string, unknown> => {
