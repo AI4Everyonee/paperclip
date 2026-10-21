@@ -93,12 +93,12 @@ export function NewAgentSetup() {
   if (params.get("adapterType") === "muse" || params.get("runnerProvider") === "muse") return <ExternalAgentInviteDialog companyId={selectedCompanyId} initialPreset="muse" initialMuseName={params.get("name") ?? ""} onClose={() => navigate("/agents/all")} onBack={() => navigate("/agents/all")} />;
   return (
     <Setup
-      key={`${selectedCompanyId}:${params.get("name")}:${params.get("adapterType")}:${params.get("runnerProvider")}:${params.get("runner")}`}
+      key={`${selectedCompanyId}:${params.get("name")}:${params.get("adapterType")}:${params.get("runnerProvider") ?? "codex"}:${params.get("runner") ?? "auto"}`}
       companyId={selectedCompanyId}
       name={params.get("name") ?? ""}
-      adapterType={params.get("adapterType") === "paperclip_runner" && ["codex", "claude"].includes(params.get("runnerProvider") ?? "codex") ? params.get("runnerProvider") === "claude" ? "claude_local" : "codex_local" : params.get("adapterType") ?? ""}
-      initialRunner={params.get("runner") ?? (params.get("adapterType") === "paperclip_runner" && ["codex", "claude"].includes(params.get("runnerProvider") ?? "codex") ? "paperclip" : params.has("setupAgentId") && ["codex_local", "claude_local"].includes(params.get("adapterType") ?? "") ? "legacy" : "auto")}
-      preserveNativeHarness={params.get("adapterType") === "paperclip_runner" && ["codex", "claude"].includes(params.get("runnerProvider") ?? "codex")}
+      adapterType={params.get("adapterType") === "paperclip_runner" && ["codex", "claude", "opencode"].includes(params.get("runnerProvider") ?? "codex") ? params.get("runnerProvider") === "claude" ? "claude_local" : params.get("runnerProvider") === "opencode" ? "opencode_local" : "codex_local" : params.get("adapterType") ?? ""}
+      initialRunner={params.get("runner") ?? (params.get("adapterType") === "paperclip_runner" && ["codex", "claude", "opencode"].includes(params.get("runnerProvider") ?? "codex") ? "paperclip" : params.has("setupAgentId") && ["codex_local", "claude_local", "opencode_local"].includes(params.get("adapterType") ?? "") ? "legacy" : "auto")}
+      preserveNativeHarness={params.get("adapterType") === "paperclip_runner" && ["codex", "claude", "opencode"].includes(params.get("runnerProvider") ?? "codex")}
       runnerProvider={params.get("runnerProvider") ?? "codex"}
       createdAgentId={params.get("createdAgentId")}
       setupAgentId={params.get("setupAgentId")}
@@ -130,7 +130,6 @@ function Setup({
   const { openNewIssue } = useDialogActions();
   const appearanceDraft = useAgentAppearanceDraft(`${companyId}:new-agent`);
   const [runner, setRunner] = useState<AgentRunnerChoice>(initialRunner === "legacy" || initialRunner === "paperclip" ? initialRunner : "auto");
-  const requestAdapterType = preserveNativeHarness && runner === "paperclip" ? "paperclip_runner" : adapterType;
   const isRunner = adapterType === "paperclip_runner";
   const isDot = isRunner && runnerProvider === "openai_dot";
   const brandType = isDot ? "openai_dot" : isRunner
@@ -203,6 +202,10 @@ function Setup({
     currentCreated ??
     (savedAgent.data?.companyId === companyId ? savedAgent.data : null);
   const completed = Boolean(created && created.pauseReason !== "setup");
+  const savedNativeOpenCode = brandType === "opencode_local" && (Boolean(setupAgentId) || runner === "legacy")
+    && created?.adapterType === "paperclip_runner";
+  const requestAdapterType = savedNativeOpenCode || (preserveNativeHarness && runner === "paperclip")
+    ? "paperclip_runner" : adapterType;
   const [saving, setSaving] = useState(false);
   const [testState, setTestState] = useState<TestState | "warn">("idle");
   const [result, setResult] = useState<AdapterEnvironmentTestResult | null>(
@@ -382,7 +385,7 @@ function Setup({
     ) && (requestAdapterType !== "paperclip_runner" || adapterType === "paperclip_runner" || adapterInventory.data?.some(adapter => adapter.type === "paperclip_runner" && adapter.loaded && !adapter.disabled));
   const connectionSettingsReady = Boolean(
     available &&
-    (!["codex_local", "claude_local"].includes(adapterType) || runner !== "auto" || Boolean(adapters.data)) &&
+    (!["codex_local", "claude_local", "opencode_local"].includes(adapterType) || runner !== "auto" || Boolean(adapters.data)) &&
     !environmentError &&
     !envs.isPending &&
     !settings.isPending &&
@@ -398,7 +401,7 @@ function Setup({
     !caps.error &&
     (!(managedOnly || forced.forced) || environmentId),
   );
-  const needsCurrentSetup = ["codex_local", "claude_local"].includes(adapterType);
+  const needsCurrentSetup = ["codex_local", "claude_local", "opencode_local"].includes(adapterType);
   const ready = Boolean(created) && connectionSettingsReady && (!needsCurrentSetup || (
     envs.isSuccess && !envs.isFetching
     && settings.isSuccess && !settings.isFetching
@@ -433,9 +436,9 @@ function Setup({
           }
         : {}),
     };
-    const config = getUIAdapter(preserveNativeHarness && runner === "paperclip" ? "paperclip_runner" : adapterType).buildAdapterConfig(preserveNativeHarness && runner === "paperclip" ? { ...values, adapterSchemaValues: runnerProvider === "claude" ? { provider: "acpx", acpxAgent: "claude", acpxPermissionMode: "approve-all" } : { provider: "codex" } } : values);
+    const config = getUIAdapter(preserveNativeHarness && runner === "paperclip" ? "paperclip_runner" : adapterType).buildAdapterConfig(preserveNativeHarness && runner === "paperclip" ? { ...values, adapterSchemaValues: runnerProvider === "claude" ? { provider: "acpx", acpxAgent: "claude", acpxPermissionMode: "approve-all" } : { provider: runnerProvider } } : values);
     if (preserveNativeHarness && runner === "paperclip") {
-      Object.assign(config, runnerProvider === "claude" ? { provider: "acpx", acpxAgent: "claude", acpxPermissionMode: "approve-all", lifecycleMode: "per_turn" } : { provider: "codex", codexPermissionMode: "never", lifecycleMode: "per_turn" });
+      Object.assign(config, runnerProvider === "claude" ? { provider: "acpx", acpxAgent: "claude", acpxPermissionMode: "approve-all", lifecycleMode: "per_turn" } : runnerProvider === "opencode" ? { provider: "opencode", opencodePermissionMode: "allow", lifecycleMode: "per_turn" } : { provider: "codex", codexPermissionMode: "never", lifecycleMode: "per_turn" });
     }
     if (isRunner)
       Object.assign(config, {
@@ -443,6 +446,18 @@ function Setup({
         ...((runnerProvider === "claude" || runnerProvider === "grok" || runnerProvider === "copilot") ? { acpxAgent: runnerProvider } : {}),
         ...(model ? { model } : {}),
       });
+    if (brandType === "opencode_local" && created) {
+      // The simplified setup page does not edit these saved runtime policies.
+      const saved = created.adapterConfig;
+      for (const [key, value] of Object.entries(saved)) {
+        if (!(key in config)) config[key] = value;
+      }
+      for (const key of ["dangerouslySkipPermissions", "opencodePermissionMode", "lifecycleMode", "idleTimeoutMs"]) {
+        if (saved[key] !== undefined) config[key] = saved[key];
+      }
+      config.model = model;
+      config.env = { ...((saved.env as object) ?? {}), ...((config.env as object) ?? {}) };
+    }
     if (!aiBinding && !nextConnection?.aiConnection && hasCredentialField && binding) {
       if (adapterType === "hermes_gateway") config.apiKey = binding;
       else
@@ -521,7 +536,7 @@ function Setup({
     creating.current = true;
     setError(null);
     navigate(`/agents/new?${new URLSearchParams({ name, adapterType, runnerProvider,
-      ...(runner !== "auto" ? { runner } : {}), setupAgentId: setupId.current })}`, { replace: true });
+      runner, setupAgentId: setupId.current })}`, { replace: true });
     const existing = agents.data ?? [];
     const leader = existing.find(agent => agent.role === "ceo" && agent.status !== "terminated");
     void agentsApi.create(companyId, {
@@ -547,6 +562,7 @@ function Setup({
     const agent = savedAgent.data;
     if (agent.pauseReason !== "setup") { setScreen("saved"); return; }
     const config = agent.adapterConfig;
+    if (brandType === "opencode_local") setRunner(agent.adapterType === "paperclip_runner" ? "paperclip" : "legacy");
     setModel(typeof config.model === "string" ? config.model : "");
     setEffort(String(config.modelReasoningEffort ?? config.reasoningEffort ?? config.effort ?? config.thinkingEffort ?? ""));
     setEnvironmentOverride(agent.defaultEnvironmentId ?? "");
@@ -568,7 +584,7 @@ function Setup({
     if (binding && connectionAdapter) setConnection({ env: {}, aiConnection: binding });
     else if (binding) setRuntimeAiBinding(binding);
     setScreen(binding || !connectionAdapter ? "runtime" : "connect");
-  }, [savedAgent.data, companyId, connectionAdapter]);
+  }, [savedAgent.data, companyId, connectionAdapter, brandType]);
 
   async function saveDraft(nextConnection = connection, exit = false, testedConfig?: Record<string, unknown>) {
     if (!created || completed) return;
@@ -646,7 +662,7 @@ function Setup({
         companyId,
         adapterType: requestAdapterType,
         providerAdapter: brandType,
-        ...(["codex_local", "claude_local"].includes(adapterType) && runner !== "auto" ? { runner } : {}),
+        ...(["codex_local", "claude_local", "opencode_local"].includes(adapterType) && runner !== "auto" ? { runner } : {}),
         adapterConfig: config,
         testCredentials: pendingCredentials(nextConnection),
         aiConnection: runtimeAiBinding ?? nextConnection?.aiConnection,
@@ -701,7 +717,7 @@ function Setup({
         role: created.role,
         reportsTo: created.reportsTo,
         adapterType: requestAdapterType,
-        ...(["codex_local", "claude_local"].includes(adapterType) && runner !== "auto" ? { runner } : {}),
+        ...(["codex_local", "claude_local", "opencode_local"].includes(adapterType) && runner !== "auto" ? { runner } : {}),
         adapterConfig: config,
         defaultEnvironmentId:
           environmentOverride ||
@@ -967,7 +983,7 @@ function Setup({
                         }).catch(cause => setError(cause instanceof Error ? cause.message : "Could not save agent setup."));
                       }}
                     /></fieldset> : <p role="status" className="text-sm text-muted-foreground">Loading connection settings…</p>}
-                    {["codex_local", "claude_local"].includes(adapterType) && <details className="mt-5 space-y-3">
+                    {["codex_local", "claude_local", "opencode_local"].includes(adapterType) && <details className="mt-5 space-y-3">
                       <summary className="cursor-pointer text-sm text-muted-foreground">Advanced</summary>
                       <AgentRunnerSelect value={runner} disabled={busy}
                         pending={adapters.isFetching} error={adapters.error?.message} onRetry={() => { void adapters.refetch(); }}
@@ -1320,7 +1336,7 @@ function Setup({
                             </Field>
                           </div>
                         )}
-                        {["codex_local", "claude_local"].includes(adapterType) && <details className="space-y-3">
+                        {["codex_local", "claude_local", "opencode_local"].includes(adapterType) && <details className="space-y-3">
                           <summary className="cursor-pointer text-sm text-muted-foreground">Advanced</summary>
                           <AgentRunnerSelect value={runner} disabled={busy}
                             pending={adapters.isFetching} error={adapters.error?.message} onRetry={() => { void adapters.refetch(); }}
