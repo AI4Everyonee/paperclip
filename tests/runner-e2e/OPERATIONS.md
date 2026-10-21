@@ -24,6 +24,23 @@ campaign allowance after declared operating holds. Prices for unused models do
 not affect this selection check. Passing it does not promise the whole campaign
 will fit: later requests still use the journal's current commitments and limits.
 
+Bounded daily and weekly workflows check source-byte limits before upload: 16 MiB
+for the resolved lockfile, 1 GiB for the build bundle, and 256 MiB each for cell
+evidence and the merged report. Build artifacts expire after one day; the others
+expire after 30 days. These are source-byte and retention controls, not measured
+compressed storage charges. ZIP framing and platform billing need separate receipts.
+
+Evidence and reports are copied into fresh private staging directories. Up to
+4,096 directory entries are inspected. Accounting under `scheduled/` and JSON
+records have priority over logs, images and archives. Each retained file has a
+SHA-256 digest. The staging receipt reserves 8 MiB inside the total and identifies
+missing, changed, unsafe or oversized files and incomplete traversal. Originals
+are never deleted or rewritten. Hidden paths remain excluded and make the scope
+incomplete. Partial staging is uploaded before the workflow
+fails, so a storage limit cannot silently turn missing evidence into success.
+These upload limits do not cap runtime disk writes, Actions caches, public S3
+history or Pages. Those resources still need their own operating-cost evidence.
+
 The launcher owns one loopback HTTP gateway per attempt. The real provider key
 stays in the parent launcher. Playwright receives an ephemeral token, and fixture
 setup saves that token through a shared AI connection with the existing custom

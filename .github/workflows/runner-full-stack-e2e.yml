@@ -229,6 +229,10 @@ jobs:
           fi
           echo "sha256=$(sha256sum pnpm-lock.yaml | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
 
+      - name: Bound scheduled lockfile upload
+        if: github.event_name == 'schedule' || (inputs.cadence != '' && inputs.cadence != 'manual')
+        run: node tests/runner-e2e/artifact-budget.mjs check lock pnpm-lock.yaml
+
       - name: Upload resolved target lockfile
         id: upload
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -680,6 +684,10 @@ jobs:
         env:
           TARGET_SHA: ${{ needs.authorize.outputs.target_sha }}
         run: echo "name=runner-e2e-build-${TARGET_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+
+      - name: Bound scheduled build upload
+        if: needs.catalog.outputs.operations_cadence != ''
+        run: node tests/runner-e2e/artifact-budget.mjs check build runner-e2e-build-bundle.tar.gz runner-e2e-build-bundle.tar.gz.sha256
 
       - name: Upload immutable shared campaign outputs
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -1163,14 +1171,23 @@ jobs:
           PAPERCLIP_PLAYWRIGHT_CHANNEL: ${{ needs.authorize.outputs.playwright_channel }}
         run: pnpm test:e2e:runner -- --id "${{ matrix.executionId }}"
 
+      - name: Stage bounded campaign evidence
+        id: stage_evidence
+        if: always() && needs.catalog.outputs.operations_cadence != ''
+        run: node tests/runner-e2e/artifact-budget.mjs stage evidence tests/runner-e2e/results bounded-runner-e2e-evidence
+
       - name: Upload access-controlled packaged cell evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: runner-e2e-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.executionId }}
-          path: tests/runner-e2e/results/
+          path: ${{ needs.catalog.outputs.operations_cadence != '' && 'bounded-runner-e2e-evidence/' || 'tests/runner-e2e/results/' }}
           retention-days: 30
           if-no-files-found: error
+
+      - name: Enforce complete bounded evidence retention
+        if: always() && needs.catalog.outputs.operations_cadence != '' && steps.stage_evidence.outputs.complete != 'true'
+        run: exit 1
 
   report:
     name: Merge and enforce campaign result
@@ -1315,14 +1332,23 @@ jobs:
           cat runner-e2e-merged-report/normalized/summary.md >> "$GITHUB_STEP_SUMMARY"
           exit "$report_status"
 
+      - name: Stage bounded merged report
+        id: stage_report
+        if: always() && needs.catalog.outputs.operations_cadence != ''
+        run: node tests/runner-e2e/artifact-budget.mjs stage report runner-e2e-merged-report bounded-runner-e2e-report
+
       - name: Upload access-controlled merged report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: runner-e2e-report-${{ github.run_id }}-${{ github.run_attempt }}
-          path: runner-e2e-merged-report/
+          path: ${{ needs.catalog.outputs.operations_cadence != '' && 'bounded-runner-e2e-report/' || 'runner-e2e-merged-report/' }}
           retention-days: 30
           if-no-files-found: error
+
+      - name: Enforce complete bounded report retention
+        if: always() && needs.catalog.outputs.operations_cadence != '' && steps.stage_report.outputs.complete != 'true'
+        run: exit 1
 
       - name: Verify normalized history source report
         id: history_source_ready
