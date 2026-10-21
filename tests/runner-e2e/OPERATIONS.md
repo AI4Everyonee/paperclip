@@ -170,6 +170,17 @@ workflow failure notifications remain the operator's notification channel.
 Missing/non-starting schedules require an external workflow monitor; this change
 does not claim that a workflow can detect its own failure to start.
 
+If a worker exits before writing its result, the server supervisor spends at
+most five seconds collecting feedback from that attempt's saved company before
+stopping the isolated server. Recovery snapshots remain private and are kept
+separate from the worker's original evidence. The failed result includes any
+recovered counts and review fingerprints; active runs or missing reads remain
+partial or unavailable. Completed results are never replaced. The launcher
+retains the private database whenever a worker result is missing, including when
+the supervisor was killed before it could capture feedback. This retention is
+reported as unconfirmed cleanup and requires inspecting the retained state.
+Authenticated public-MCP fixtures do not use the local operator recovery path.
+
 Original grades are imported into Braintrust without rerunning agents. The
 access-controlled artifact includes the journal, forecast, feedback dispositions,
 experiment receipt, indexing receipt and findings. The trusted report job rebuilds the dashboard
