@@ -7,6 +7,7 @@ import { evalRequestReservation } from "./eval-gateway.js";
 import prices from "./scheduled-prices.json" with { type: "json" };
 import { scheduledOperatingOverhead, validateOperatingOverhead, type EvalOperatingOverhead } from "./operating-overhead.js";
 import { usdToUnits } from "../../packages/shared/src/money.js";
+import { scheduledForecast } from "./scheduled-forecast.js";
 
 export type EvalCadence = "daily" | "weekly";
 export const EVAL_SCHEDULES = { daily: "47 8 * * *", weekly: "47 9 * * 0" } as const;
@@ -92,8 +93,8 @@ export async function prepareScheduledCampaign(env: NodeJS.ProcessEnv, now = Dat
   await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600, flag: "wx" });
   const forecast = { cadence, executionIds: manifest.executionIds, maxUsd: manifest.limits.maxUsd,
     overhead: manifest.limits.overhead, budgetScope: "model requests plus declared operating overhead reservations",
-    expectedModelUsd: cadence === "daily" ? "0.62" : "1.00", expectedAttemptSeconds: cadence === "daily" ? 100 : 160,
-    basis: "2026-10-20 pilot; one successful sample per cell; excludes failed attempts, setup/build/queue, infrastructure and observability charges",
+    measurements: scheduledForecast(runnerMatrix.filter(execution => manifest.executionIds.includes(execution.id)), manifest.models),
+    basis: "Retained local pilot measurements; successful samples and matching configurations are reported separately",
     uncertainty: "Incomplete provider receipts and no invoice reconciliation; estimates are not a guarantee",
     maximumRequestReservations: manifest.models.map(model => ({ model: model.price.model,
       usd: evalRequestReservation({ ...model, apiKey: "forecast", mode: "braintrust" }) })),

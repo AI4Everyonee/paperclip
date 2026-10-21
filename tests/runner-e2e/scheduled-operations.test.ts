@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, it } from "vitest";
@@ -61,6 +61,10 @@ it("fails closed before paid work if disabled, missing project identity, or pref
     await expect(prepareScheduledCampaign({ ...env, PAPERCLIP_E2E_BRAINTRUST_PROJECT_ID: "" }, input.now)).rejects.toThrow("UUID");
     const prepared = await prepareScheduledCampaign(env, input.now);
     expect(prepared.manifest.limits.campaignId).toBe(prepared.campaignId);
+    const forecast = JSON.parse(await readFile(path.join(path.dirname(prepared.manifestPath), "forecast.json"), "utf8"));
+    expect(forecast.measurements.historicalSuccessfulSelection).toEqual({ modelUsd: "0.427624800", summedAttemptMs: 72757 });
+    expect(forecast.measurements.hostedAttemptMs).toBeNull();
+    expect(forecast.maxUsd).toBe("20");
     await expect(prepareScheduledCampaign(env, input.now)).rejects.toThrow("EEXIST");
   } finally { await rm(directory, { recursive: true, force: true }); }
 });

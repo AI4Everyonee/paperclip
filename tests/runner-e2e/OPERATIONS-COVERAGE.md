@@ -18,11 +18,28 @@ Both profiles use the exact model and limits in the reviewed pricecard.
 
 These associations identify partial coverage. They do not qualify every run
 lifecycle, the Commentary browser page, continuation, or remote execution.
-The initial forecast uses one successful pilot sample per selected cell:
-approximately $0.62 and 100 summed attempt seconds daily, $1.00 and 160 seconds
-weekly. Earlier failed attempts remain in campaign spending. These values omit
-queue/build time and non-model charges; use the retained forecast's uncertainty,
-not its midpoint, when considering expansion.
+The October 21 local pilot measured one successful sample per selected cell:
+$0.427624800 and 72.757 summed attempt seconds for the daily selection,
+$0.791539400 and 127.069 seconds for the weekly selection. These are historical
+gateway estimates from the Linux ARM64 container. They include model setup
+requests and attempt setup/teardown, but omit queue/build time and non-model
+charges. Earlier failed and interrupted attempts remain in campaign spending.
+
+`scheduled-measurements.json` retains the exact attempt, source revision,
+definition, model, price version, result hash and journal hashes for each sample.
+`forecast.json` includes this evidence and a snapshot hash. It separates the
+historical successful selection from samples matching the current definition,
+model, environment, runtime, route and pricing. A missing matching cell makes
+the compatible selection total unknown. The feedback definition changed after
+these four samples; its earlier results are not current qualification.
+
+Per-cell mean and median are descriptive. P95 stays unknown below 20 samples
+and then uses nearest rank; this is not a statistical confidence guarantee.
+Do not sum per-cell percentiles into a campaign percentile. Hosted cost/time
+and the selection's P95 remain unknown until separately measured. A passing
+sample does not predict failure frequency or account for infrastructure,
+storage, observability or subscriptions. Forecasts never reduce reservations
+or the approved budget limits.
 
 At the October 21, 2026 catalog audit, 47 suites declared 738 cells. `--all`
 included 179; the other 559 required explicit selection. The bounded weekly

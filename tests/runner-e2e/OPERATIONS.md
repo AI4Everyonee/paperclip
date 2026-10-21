@@ -297,10 +297,18 @@ The checked pricecard expires on November 19, 2026. Admission stops when the
 pricecard expires, the catalog model changes, the project is missing, or the
 preflight already exists. Review current official prices and context limits
 before updating `scheduled-prices.json`. `forecast.json` records the selected
-IDs, small-sample pilot estimates, uncertainty, reservations and price expiry.
-The pilot does not establish p50/p95 or reliability. Daily coverage is deliberately
-limited to the two locally qualified Claude cases; broader rotation and Daytona
-remain unqualified and are not silently included by `--all`.
+IDs, provenance-linked pilot measurements, compatibility gaps, uncertainty,
+reservations and price expiry. The historical daily/weekly successful model
+subtotals are $0.427624800/$0.791539400; they are not campaign bills. Setup model
+calls and attempt setup/teardown are included, while CI setup/build/queue and
+non-model charges are excluded. Current compatible totals stay unknown if any
+selected cell lacks a matching measurement. Hosted timing is still unmeasured.
+Per-cell medians describe only the retained samples; P95 requires at least 20
+matching samples and does not establish reliability. See
+[measurement provenance and limitations](OPERATIONS-COVERAGE.md#initial-cadence).
+Daily coverage is limited to the two Claude journeys. The feedback definition
+has changed since its passing pilot. Broader rotation and Daytona remain
+unqualified and are not silently included by `--all`.
 
 Dispatch `cadence: daily` or `weekly` from the default branch to qualify the same
 path manually. Bounded dispatch rejects custom target revisions and selectors.
