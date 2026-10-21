@@ -166,6 +166,15 @@ native and legacy Claude selections, including the aggregate scheduled selection
 For a local campaign, verify that same CLI prerequisite before starting a paid
 attempt. Installing the ACP package alone does not satisfy this setup path.
 
+Bounded cases keep the gateway in the setup phase until the created agent's
+asynchronous lifecycle verification reaches ready. This wait uses the remaining
+attempt deadline, allows at most 45 seconds, and stops on an observed setup error
+or hold. The private `budgeted-setup.json` snapshot retains state transitions.
+Only then does the case begin agent-phase accounting and create its task.
+Older evidence that advanced after fixture creation may label hello probes as
+agent cost. Its campaign totals still include those requests; retain that phase
+limitation when comparing setup and task spending.
+
 Bounded daily/weekly campaigns require a public repository and use the existing
 standard `ubuntu-latest` runner for both compilation and execution. They do not
 follow the manual campaign's AWS runner switch. GitHub charges no standard
