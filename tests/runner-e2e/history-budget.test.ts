@@ -145,4 +145,14 @@ describe("bounded public history", () => {
     await expect(timed.run(["s3api", "head-object"])).rejects.toThrow("allowance");
     expect(runner).toHaveBeenCalledTimes(HISTORY_LIMITS.requests);
   });
+
+  it("retains the object identity and provider version separately from billed cost", async () => {
+    const root = await temporary(); const receipt = path.join(root, "receipt.json"); const source = path.join(root, "source.json");
+    await writeFile(source, "{}");
+    const publisher = new BoundedHistoryPublisher(receipt, async () => ({ stdout: '{"VersionId":"version-1","ETag":"etag-1"}' }));
+    await publisher.upload("bucket", "campaign/result.json", source, "application/json", "no-cache", true);
+    expect(JSON.parse(await readFile(receipt, "utf8"))).toMatchObject({ billedUsd: null, requests: [{
+      operation: "put-object", status: "accepted", bucket: "bucket", key: "campaign/result.json", versionId: "version-1", etag: "etag-1", sourceBytes: 2,
+    }] });
+  });
 });

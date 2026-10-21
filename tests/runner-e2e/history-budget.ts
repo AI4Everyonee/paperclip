@@ -87,7 +87,7 @@ function errorDetail(error: unknown) {
 
 export class BoundedHistoryPublisher {
   private readonly startedAt = Date.now();
-  private readonly observations: Array<{ operation: string; status: string; sourceBytes?: number }> = [];
+  private readonly observations: Array<{ operation: string; status: string; bucket?: string; key?: string; sourceBytes?: number; versionId?: string; etag?: string }> = [];
 
   constructor(private readonly receipt: string, private readonly runner: AwsRunner = defaultRunner) {}
 
@@ -96,12 +96,19 @@ export class BoundedHistoryPublisher {
     if (remaining <= 0 || this.observations.length >= HISTORY_LIMITS.requests) {
       throw new Error("Bounded history publisher exhausted its time or request allowance");
     }
-    const observation = { operation: args[1]!, status: "unknown", ...(sourceBytes === undefined ? {} : { sourceBytes }) };
+    const argument = (name: string) => args.includes(name) ? args[args.indexOf(name) + 1] : undefined;
+    const observation: typeof this.observations[number] = { operation: args[1]!, status: "unknown",
+      bucket: argument("--bucket"), key: argument("--key"), ...(sourceBytes === undefined ? {} : { sourceBytes }) };
     this.observations.push(observation);
     await this.save();
     try {
       const result = await this.runner([...args, "--cli-connect-timeout", "10", "--cli-read-timeout", "30"], Math.min(30_000, remaining));
       observation.status = "accepted";
+      if (observation.operation === "put-object") {
+        const response = JSON.parse(result.stdout) as { VersionId?: unknown; ETag?: unknown };
+        if (typeof response.VersionId === "string") observation.versionId = response.VersionId.slice(0, 1024);
+        if (typeof response.ETag === "string") observation.etag = response.ETag.slice(0, 1024);
+      }
       return result;
     } catch (error) {
       observation.status = /\((?:NoSuchKey|404|NotFound|ObjectLockConfigurationNotFoundError|ReplicationConfigurationNotFoundError)\)/.test(errorDetail(error))
@@ -118,6 +125,7 @@ export class BoundedHistoryPublisher {
       await file.writeFile(`${JSON.stringify({
       schema: "paperclip.runner-e2e.history-publication/v1",
       startedAt: new Date(this.startedAt).toISOString(), observedAt: new Date().toISOString(),
+      workflowRunId: process.env.GITHUB_RUN_ID ?? null, workflowAttempt: process.env.GITHUB_RUN_ATTEMPT ?? null,
       limits: HISTORY_LIMITS, billedUsd: null, requests: this.observations,
       attemptedSourceBytes: this.observations.reduce((sum, entry) => sum + (entry.sourceBytes ?? 0), 0),
       }, null, 2)}\n`);
