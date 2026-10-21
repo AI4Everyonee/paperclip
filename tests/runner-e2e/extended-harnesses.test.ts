@@ -51,8 +51,8 @@ describe("extended ACP harness qualification", () => {
     const server = buildPaperclipServerEnvironment(env);
     for (const name of Object.keys(ambient).filter(name => name !== "PAPERCLIP_RUNNER_ACPX_QUALIFICATION")) expect(server[name]).toBeUndefined();
     expect(buildRunnerE2EProcessEnvironment(ambient, []).PAPERCLIP_RUNNER_ACPX_QUALIFICATION).toBeUndefined();
-    const pending = selected.find(value => value.profile.qualificationCandidate === "copilot")!;
-    expect(() => buildRunnerE2EProcessEnvironment({}, [{ ...pending, suite: { ...pending.suite, manualOnly: false } }])).toThrow("explicit");
+    const copilot = selected.find(value => value.profile.qualificationCandidate === "copilot")!;
+    expect(() => buildRunnerE2EProcessEnvironment({}, [{ ...copilot, suite: { ...copilot.suite, manualOnly: false } }])).toThrow("explicit");
   });
   it("adds six explicit local/Daytona warm cells without admitting them implicitly", () => {
     const warm = runnerMatrix.filter(cell => cell.suite.id === "rich-acp-warm-continuity");
