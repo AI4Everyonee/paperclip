@@ -107,11 +107,13 @@ control, not a provider billing cap. Actual resource bounds, cost collection and
 reviewed allowances still need qualification before recurrence is enabled; see
 [the allowance contract](OPERATIONS.md#recurring-campaigns).
 
-Bounded public history now has an isolated prefix, file/byte/request boundaries,
-retained publication receipts and verified current/noncurrent expiration rules;
-see [public history retention](OPERATIONS.md#public-history-retention). These
-controls bound one publisher invocation and its stored payload. They do not
-establish an exact campaign storage invoice or cap public CDN traffic.
+Recurring evidence and reports use private S3 archives with file/byte/request
+boundaries, retained transfer receipts and verified access/expiration rules;
+see [private recurring history](OPERATIONS.md#private-recurring-history). The
+public workflow retains only a content-free availability marker for monitoring.
+Public history is a separate explicit publication step. Private retention still
+needs hosted OIDC qualification and actual storage/transfer billing evidence;
+local archive tests and an infrastructure template do not establish those facts.
 
 ## Separate Runner Eval audit
 

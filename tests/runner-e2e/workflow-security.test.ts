@@ -775,12 +775,12 @@ describe("public repository paid workflow security", () => {
       "PAPERCLIP_RUNNER_E2E_REPORT_ROOT: ${{ github.workspace }}/selected-runner-e2e",
     );
     expect(report).toContain(
-      "PAPERCLIP_RUNNER_E2E_HISTORY_PUBLIC_BASE_URL: ${{ vars.RUNNER_E2E_HISTORY_PUBLIC_BASE_URL }}",
+      "PAPERCLIP_RUNNER_E2E_HISTORY_PUBLIC_BASE_URL: ${{ needs.catalog.outputs.operations_cadence == '' && vars.RUNNER_E2E_HISTORY_PUBLIC_BASE_URL || '' }}",
     );
-    const historyPrefix = "${{ needs.catalog.outputs.operations_cadence != '' && format('{0}/bounded-v1', vars.RUNNER_E2E_HISTORY_PREFIX || 'runner-e2e') || vars.RUNNER_E2E_HISTORY_PREFIX || 'runner-e2e' }}";
+    const historyPrefix = "${{ vars.RUNNER_E2E_HISTORY_PREFIX || 'runner-e2e' }}";
     expect(report).toContain(`PAPERCLIP_RUNNER_E2E_HISTORY_PREFIX: ${historyPrefix}`);
     expect(publisher).toContain(`RUNNER_E2E_HISTORY_PREFIX: ${historyPrefix}`);
-    expect(publisher).toContain("PAPERCLIP_E2E_BOUNDED_HISTORY: ${{ needs.catalog.outputs.operations_cadence != '' && 'true' || 'false' }}");
+    expect(publisher).toContain("needs.catalog.outputs.operations_cadence == '' && needs.report.outputs.history_source_ready == 'true'");
     expect(
       report.indexOf("Select latest workflow attempt per cell"),
     ).toBeLessThan(report.indexOf("Collect blob reports"));
@@ -796,6 +796,31 @@ describe("public repository paid workflow security", () => {
     expect(publisher).toContain(
       "artifact_name: ${{ needs.publish_history.outputs.pages_artifact_name }}",
     );
+  });
+
+  it("keeps recurring reports private while preserving a content-free liveness receipt", async () => {
+    const workflow = await readFile(path.join(repositoryRoot, ".github/workflows/runner-full-stack-e2e.yml"), "utf8");
+    const paid = workflow.split("\n  test:")[1]!.split("\n  report:")[0]!;
+    const report = workflow.split("\n  report:")[1]!.split("\n  publish_history:")[0]!;
+    const step = (source: string, name: string) => source.split(`      - name: ${name}\n`)[1]!.split(/\n      - /u)[0]!;
+    for (const [job, name] of [[paid, "Upload access-controlled packaged cell evidence"], [report, "Upload access-controlled merged report"]]) {
+      expect(step(job!, name!)).toContain("if: always() && needs.catalog.outputs.operations_cadence == ''");
+    }
+    expect(step(report, "Download cell evidence")).toContain("if: needs.catalog.outputs.operations_cadence == ''");
+    expect(step(paid, "Run bounded campaign and retain feedback review")).not.toContain("AWS_");
+    for (const job of [paid, report]) {
+      const credentials = step(job, "Obtain scoped private history credentials");
+      expect(credentials).toContain("output-env-credentials: false");
+      expect(credentials).toContain("disable-retry: true");
+      expect(credentials).toContain("RUNNER_E2E_PRIVATE_HISTORY_AWS_ROLE_ARN");
+    }
+    expect(paid.indexOf("Verify private evidence retention before paid execution")).toBeLessThan(paid.indexOf("Run bounded campaign and retain feedback review"));
+    expect(report).toContain("report > runner-e2e-merged-report/report.log 2>&1");
+    const marker = step(report, "Retain report availability for the schedule monitor");
+    expect(marker).toContain("steps.private_report.outcome == 'success'");
+    expect(marker).toContain("path: private-report-status.json");
+    expect(report).toContain('echo \'{"version":1,"privateReportRetained":true}\' > private-report-status.json');
+    expect(marker).not.toMatch(/BUCKET|ROLE_ARN|private-report-reference/);
   });
 
   it("uses environment-scoped OIDC for a no-delete history publisher", async () => {

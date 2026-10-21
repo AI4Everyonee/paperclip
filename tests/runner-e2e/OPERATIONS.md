@@ -43,16 +43,68 @@ scope and does not fail retention. Other hidden paths make the scope incomplete.
 Skipped paths and unvisited subtrees are named; overlong names use a bounded preview
 and full-path digest. Partial staging is uploaded before the workflow
 fails, so a storage limit cannot silently turn missing evidence into success.
-These upload limits do not cap runtime disk writes or Actions caches. Public
-history has the separate boundaries below. Each service still needs billing evidence.
+These upload limits do not cap runtime disk writes or Actions caches. Each service
+still needs billing evidence.
+
+### Private recurring history
+
+Daily and weekly evidence and merged reports are retained in a dedicated private
+S3 bucket. They are not uploaded as plaintext GitHub artifacts, sent to the public
+history publisher, or deployed to Pages. The report command's output also stays
+inside the private report. The public workflow retains only a fixed availability
+marker for the existing schedule monitor, with no report contents, storage address
+or object identity. Public-repository GitHub artifacts are readable by signed-in
+repository readers; authentication alone does not make those reports private.
+
+Deploy `.github/infra/runner-e2e-private-history.yml` with the existing GitHub OIDC
+provider and set `RUNNER_E2E_PRIVATE_HISTORY_S3_BUCKET`,
+`RUNNER_E2E_PRIVATE_HISTORY_AWS_ROLE_ARN` and
+`RUNNER_E2E_PRIVATE_HISTORY_AWS_REGION`. The role trusts only this repository's
+`runner-e2e-paid` and `runner-e2e-history` environments. Review both environments'
+deployment branch allowlists before deployment; every allowed branch shares this
+role's trust boundary. This workflow separately requires the default branch before
+paid access. The role has configuration reads
+and GetObject/PutObject under `runner-e2e-private/bounded-v1/`; no deletion,
+policy changes or access to the public history bucket. AWS credentials are step
+outputs supplied only to private transfer commands, never exported to paid agents.
+
+Admission verifies retention before paid execution. Every transfer verifies all
+four public-access blocks, disabled object ACLs, no bucket-policy reader grants,
+versioning, the 30-day/current and one-day/noncurrent expiration rules, and absence
+of Object Lock and replication. Inspection failure stops the transfer. The private
+bucket is not a CDN origin and has no external reader grant.
+
+Evidence and report archives each contain at most 256 MiB of staged files and
+4,097 entries including the staging receipt, with an additional 8 MiB ceiling for
+ZIP framing. Archives use stored entries, without decompression. Extraction checks
+paths, entry types, duplicate names, directory size, payload totals and ZIP checksums
+before committing a fresh destination. Transfers use one conditional PutObject or
+one ranged GetObject. Automatic AWS retries and workflow reruns are refused. The
+bucket also rejects PutObject requests without an If-None-Match condition. A local
+transfer receipt cannot be overwritten by rerunning the command in the same directory.
+Each command retains admission and outcome metadata; a private receipt retains the
+archive hash and object version. Its own upload remains pending in that snapshot,
+so the snapshot is not proof of complete billing. Operator downloads and STS
+credential exchanges also need separate cost attribution.
+
+For authenticated retrieval, set the bucket variable and AWS profile, then run:
+
+```sh
+node cli/node_modules/tsx/dist/cli.mjs tests/runner-e2e/private-history.ts download report RUN_ID /tmp/eval-RUN_ID
+```
+
+Use `evidence` instead of `report` for the original staged accounting and diagnostics.
+The requested destination must not already exist. Keep the downloaded report private.
+To publish a selected campaign, review its retained normalized report and invoke the
+existing trusted history publisher explicitly with the public destination; no agent
+rerun is needed. Recurring execution never invokes that publication path.
 
 ### Public history retention
 
-Bounded campaigns publish below `<history-prefix>/bounded-v1/`. The existing
-manual history remains at its original prefix. Both report links and the trusted
-publisher use this isolated destination. Publication is limited to the original
-CI workflow attempt; a failed publisher retains its receipt and is not retried
-under the same allowance.
+Public history remains an explicit manual operation. The optional bounded publisher
+uses `<history-prefix>/bounded-v1/` when `PAPERCLIP_E2E_BOUNDED_HISTORY=true`; existing
+manual history otherwise retains its original prefix. Bounded publication is limited
+to the original CI workflow attempt and is not retried under the same allowance.
 
 Before any upload, the publisher validates all outgoing bundles: at most 64 MiB
 and 256 files for the immutable campaign including its manifest, 16 MiB and eight
@@ -75,7 +127,7 @@ The publisher admits at most 280 S3 CLI commands over ten minutes, with a
 30-second command timeout and automatic AWS retries disabled. Uploads use
 single `PutObject` operations in STANDARD storage; immutable objects use
 `If-None-Match`. A private receipt is synced before each command and retained
-as an Actions artifact. Unknown responses remain unknown. Source bytes, S3
+locally for the operator to retain privately. Unknown responses remain unknown. Source bytes, S3
 commands and expiration eligibility are not invoices or exact deletion times.
 Credential lookup, public downloads/CDN egress, Pages hosting and shared service
 charges require separate accounting; these limits do not cap public traffic.

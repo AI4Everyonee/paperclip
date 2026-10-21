@@ -855,6 +855,7 @@ jobs:
     timeout-minutes: ${{ matrix.timeoutMinutes }}
     permissions:
       contents: read
+      id-token: write
     environment:
       name: runner-e2e-paid
     strategy:
@@ -1123,6 +1124,28 @@ jobs:
           timeout 120s docker pull "$oracle_image"
           timeout 30s docker image inspect "$oracle_image" --format '{{.Id}}'
 
+      - name: Obtain scoped private history credentials
+        id: private_history_credentials
+        if: needs.catalog.outputs.operations_cadence != ''
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6
+        with:
+          role-to-assume: ${{ vars.RUNNER_E2E_PRIVATE_HISTORY_AWS_ROLE_ARN }}
+          aws-region: ${{ vars.RUNNER_E2E_PRIVATE_HISTORY_AWS_REGION }}
+          output-env-credentials: false
+          output-credentials: true
+          disable-retry: true
+          action-timeout-s: 60
+
+      - name: Verify private evidence retention before paid execution
+        if: needs.catalog.outputs.operations_cadence != ''
+        env:
+          AWS_ACCESS_KEY_ID: ${{ steps.private_history_credentials.outputs.aws-access-key-id }}
+          AWS_SECRET_ACCESS_KEY: ${{ steps.private_history_credentials.outputs.aws-secret-access-key }}
+          AWS_SESSION_TOKEN: ${{ steps.private_history_credentials.outputs.aws-session-token }}
+          AWS_DEFAULT_REGION: ${{ vars.RUNNER_E2E_PRIVATE_HISTORY_AWS_REGION }}
+          RUNNER_E2E_PRIVATE_HISTORY_S3_BUCKET: ${{ vars.RUNNER_E2E_PRIVATE_HISTORY_S3_BUCKET }}
+        run: node cli/node_modules/tsx/dist/cli.mjs tests/runner-e2e/private-history.ts verify evidence "$GITHUB_RUN_ID" bounded-runner-e2e-evidence
+
       - name: Prepare bounded campaign before credentials
         if: needs.catalog.outputs.operations_cadence != ''
         env:
@@ -1177,13 +1200,23 @@ jobs:
         run: node tests/runner-e2e/artifact-budget.mjs stage evidence tests/runner-e2e/results bounded-runner-e2e-evidence
 
       - name: Upload access-controlled packaged cell evidence
-        if: always()
+        if: always() && needs.catalog.outputs.operations_cadence == ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: runner-e2e-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.executionId }}
-          path: ${{ needs.catalog.outputs.operations_cadence != '' && 'bounded-runner-e2e-evidence/' || 'tests/runner-e2e/results/' }}
+          path: tests/runner-e2e/results/
           retention-days: 30
           if-no-files-found: error
+
+      - name: Retain bounded campaign evidence in private AWS storage
+        if: always() && needs.catalog.outputs.operations_cadence != '' && steps.private_history_credentials.outcome == 'success'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ steps.private_history_credentials.outputs.aws-access-key-id }}
+          AWS_SECRET_ACCESS_KEY: ${{ steps.private_history_credentials.outputs.aws-secret-access-key }}
+          AWS_SESSION_TOKEN: ${{ steps.private_history_credentials.outputs.aws-session-token }}
+          AWS_DEFAULT_REGION: ${{ vars.RUNNER_E2E_PRIVATE_HISTORY_AWS_REGION }}
+          RUNNER_E2E_PRIVATE_HISTORY_S3_BUCKET: ${{ vars.RUNNER_E2E_PRIVATE_HISTORY_S3_BUCKET }}
+        run: node cli/node_modules/tsx/dist/cli.mjs tests/runner-e2e/private-history.ts upload evidence "$GITHUB_RUN_ID" bounded-runner-e2e-evidence
 
       - name: Enforce complete bounded evidence retention
         if: always() && needs.catalog.outputs.operations_cadence != '' && steps.stage_evidence.outputs.complete != 'true'
@@ -1200,6 +1233,9 @@ jobs:
     permissions:
       actions: read
       contents: read
+      id-token: write
+    environment:
+      name: runner-e2e-history
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -1250,6 +1286,7 @@ jobs:
 
       - name: Download cell evidence
         id: download_evidence
+        if: needs.catalog.outputs.operations_cadence == ''
         continue-on-error: true
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
@@ -1258,12 +1295,34 @@ jobs:
           merge-multiple: false
 
       - name: Retry cell evidence download after transport failure
-        if: steps.download_evidence.outcome == 'failure'
+        if: needs.catalog.outputs.operations_cadence == '' && steps.download_evidence.outcome == 'failure'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: runner-e2e-${{ github.run_id }}-*-*
           path: downloaded-runner-e2e
           merge-multiple: false
+
+      - name: Obtain scoped private history credentials
+        id: private_history_credentials
+        if: needs.catalog.outputs.operations_cadence != ''
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6
+        with:
+          role-to-assume: ${{ vars.RUNNER_E2E_PRIVATE_HISTORY_AWS_ROLE_ARN }}
+          aws-region: ${{ vars.RUNNER_E2E_PRIVATE_HISTORY_AWS_REGION }}
+          output-env-credentials: false
+          output-credentials: true
+          disable-retry: true
+          action-timeout-s: 60
+
+      - name: Download private bounded campaign evidence
+        if: needs.catalog.outputs.operations_cadence != ''
+        env:
+          AWS_ACCESS_KEY_ID: ${{ steps.private_history_credentials.outputs.aws-access-key-id }}
+          AWS_SECRET_ACCESS_KEY: ${{ steps.private_history_credentials.outputs.aws-secret-access-key }}
+          AWS_SESSION_TOKEN: ${{ steps.private_history_credentials.outputs.aws-session-token }}
+          AWS_DEFAULT_REGION: ${{ vars.RUNNER_E2E_PRIVATE_HISTORY_AWS_REGION }}
+          RUNNER_E2E_PRIVATE_HISTORY_S3_BUCKET: ${{ vars.RUNNER_E2E_PRIVATE_HISTORY_S3_BUCKET }}
+        run: node cli/node_modules/tsx/dist/cli.mjs tests/runner-e2e/private-history.ts download evidence "$GITHUB_RUN_ID" "downloaded-runner-e2e/runner-e2e-$GITHUB_RUN_ID-1-scheduled-campaign"
 
       - name: Select latest workflow attempt per cell
         if: always() && needs.catalog.outputs.operations_cadence == ''
@@ -1322,14 +1381,22 @@ jobs:
           PAPERCLIP_E2E_CAMPAIGN_ID: ${{ needs.catalog.outputs.operations_cadence != '' && format('gha-{0}-1-scheduled-campaign', github.run_id) || format('gha-{0}-{1}', github.run_id, github.run_attempt) }}
           PAPERCLIP_RUNNER_E2E_SOURCE_SHA: ${{ needs.authorize.outputs.target_sha }}
           PAPERCLIP_RUNNER_E2E_SOURCE_REF: ${{ needs.authorize.outputs.target_ref }}
-          PAPERCLIP_RUNNER_E2E_HISTORY_PUBLIC_BASE_URL: ${{ vars.RUNNER_E2E_HISTORY_PUBLIC_BASE_URL }}
-          PAPERCLIP_RUNNER_E2E_HISTORY_PREFIX: ${{ needs.catalog.outputs.operations_cadence != '' && format('{0}/bounded-v1', vars.RUNNER_E2E_HISTORY_PREFIX || 'runner-e2e') || vars.RUNNER_E2E_HISTORY_PREFIX || 'runner-e2e' }}
+          PAPERCLIP_RUNNER_E2E_HISTORY_PUBLIC_BASE_URL: ${{ needs.catalog.outputs.operations_cadence == '' && vars.RUNNER_E2E_HISTORY_PUBLIC_BASE_URL || '' }}
+          PAPERCLIP_RUNNER_E2E_HISTORY_PREFIX: ${{ vars.RUNNER_E2E_HISTORY_PREFIX || 'runner-e2e' }}
+          EVAL_OPERATIONS_CADENCE: ${{ needs.catalog.outputs.operations_cadence }}
         run: |
           set +e
-          pnpm test:e2e:runner:report
+          if [ -n "$EVAL_OPERATIONS_CADENCE" ]; then
+            mkdir -p runner-e2e-merged-report
+            pnpm test:e2e:runner:report > runner-e2e-merged-report/report.log 2>&1
+          else
+            pnpm test:e2e:runner:report
+          fi
           report_status=$?
           set -e
-          cat runner-e2e-merged-report/normalized/summary.md >> "$GITHUB_STEP_SUMMARY"
+          if [ -z "$EVAL_OPERATIONS_CADENCE" ]; then
+            cat runner-e2e-merged-report/normalized/summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
           exit "$report_status"
 
       - name: Stage bounded merged report
@@ -1338,11 +1405,34 @@ jobs:
         run: node tests/runner-e2e/artifact-budget.mjs stage report runner-e2e-merged-report bounded-runner-e2e-report
 
       - name: Upload access-controlled merged report
-        if: always()
+        if: always() && needs.catalog.outputs.operations_cadence == ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: runner-e2e-report-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ needs.catalog.outputs.operations_cadence != '' && 'bounded-runner-e2e-report/' || 'runner-e2e-merged-report/' }}
+          path: runner-e2e-merged-report/
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Retain bounded report in private AWS storage
+        id: private_report
+        if: always() && needs.catalog.outputs.operations_cadence != '' && steps.private_history_credentials.outcome == 'success'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ steps.private_history_credentials.outputs.aws-access-key-id }}
+          AWS_SECRET_ACCESS_KEY: ${{ steps.private_history_credentials.outputs.aws-secret-access-key }}
+          AWS_SESSION_TOKEN: ${{ steps.private_history_credentials.outputs.aws-session-token }}
+          AWS_DEFAULT_REGION: ${{ vars.RUNNER_E2E_PRIVATE_HISTORY_AWS_REGION }}
+          RUNNER_E2E_PRIVATE_HISTORY_S3_BUCKET: ${{ vars.RUNNER_E2E_PRIVATE_HISTORY_S3_BUCKET }}
+        run: |
+          node cli/node_modules/tsx/dist/cli.mjs tests/runner-e2e/private-history.ts upload report "$GITHUB_RUN_ID" bounded-runner-e2e-report
+          echo '{"version":1,"privateReportRetained":true}' > private-report-status.json
+          echo 'The recurring campaign report is retained in private AWS storage. See the eval operations runbook for authenticated retrieval.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Retain report availability for the schedule monitor
+        if: always() && needs.catalog.outputs.operations_cadence != '' && steps.private_report.outcome == 'success'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: runner-e2e-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: private-report-status.json
           retention-days: 30
           if-no-files-found: error
 
@@ -1365,7 +1455,7 @@ jobs:
   publish_history:
     name: Publish S3 history and Pages bundle with declared screenshots
     needs: [authorize, catalog, report]
-    if: always() && needs.catalog.result == 'success' && needs.report.outputs.history_source_ready == 'true'
+    if: always() && needs.catalog.result == 'success' && needs.catalog.outputs.operations_cadence == '' && needs.report.outputs.history_source_ready == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     outputs:
@@ -1423,19 +1513,9 @@ jobs:
         env:
           PAPERCLIP_RUNNER_E2E_REPORT_DIR: ${{ github.workspace }}/runner-e2e-merged-report/normalized
           RUNNER_E2E_HISTORY_S3_BUCKET: ${{ vars.RUNNER_E2E_HISTORY_S3_BUCKET }}
-          RUNNER_E2E_HISTORY_PREFIX: ${{ needs.catalog.outputs.operations_cadence != '' && format('{0}/bounded-v1', vars.RUNNER_E2E_HISTORY_PREFIX || 'runner-e2e') || vars.RUNNER_E2E_HISTORY_PREFIX || 'runner-e2e' }}
+          RUNNER_E2E_HISTORY_PREFIX: ${{ vars.RUNNER_E2E_HISTORY_PREFIX || 'runner-e2e' }}
           RUNNER_E2E_HISTORY_PUBLIC_BASE_URL: ${{ vars.RUNNER_E2E_HISTORY_PUBLIC_BASE_URL }}
-          PAPERCLIP_E2E_BOUNDED_HISTORY: ${{ needs.catalog.outputs.operations_cadence != '' && 'true' || 'false' }}
         run: pnpm test:e2e:runner:history:publish
-
-      - name: Retain bounded publication receipt
-        if: always() && needs.catalog.outputs.operations_cadence != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: runner-e2e-publication-${{ github.run_id }}-${{ github.run_attempt }}
-          path: runner-e2e-merged-report/history-publication-receipt.json
-          retention-days: 30
-          if-no-files-found: warn
 
       - name: Resolve Pages artifact name
         id: pages_artifact_name
