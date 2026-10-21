@@ -112,7 +112,7 @@ export async function forwardEvalRequest(input: {
   if (Date.now() >= input.deadlineAt) throw new EvalAdmissionError("request_deadline_reached");
   const requestId = randomUUID();
   const receipt: EvalGatewayReceipt = { requestId, route: route.mode, outcome: "failed", usageComplete: false, final: false, costUsd: null };
-  const usage = new ProviderUsageAccumulator(route.provider);
+  const usage = new ProviderUsageAccumulator(route.provider, body);
   await ledger.reserve(requestId, input.identity, reservation);
   const abort = new AbortController();
   const signal = AbortSignal.any([abort.signal, AbortSignal.timeout(Math.max(1, Math.min(route.timeoutMs, input.deadlineAt - Date.now()))), ...(input.signal ? [input.signal] : [])]);

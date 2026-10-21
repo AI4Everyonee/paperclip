@@ -43,6 +43,22 @@ it("stops at the campaign cap before any upstream request", async () => {
   await expect(forwardEvalRequest({ ...f, transport })).rejects.toThrow("spending cap");
   expect(transport).not.toHaveBeenCalled();
 });
+it.each(["direct", "braintrust"] as const)("retains request-policy cost provenance without changing the %s cache policy", async mode => {
+  const f = await fixture();
+  const pricedRoute = { ...route, mode, price: { ...route.price, model: "gpt-5.6-sol", inputUsdPerMillion: "4", cachedReadUsdPerMillion: "0.4",
+    outputUsdPerMillion: "20", cacheWrite30mUsdPerMillion: "5", cacheWrite12hUsdPerMillion: "10" } };
+  const payload = { ...f.payload, model: pricedRoute.price.model, prompt_cache_retention: "24h", stream: true };
+  const body = { ...usage, model: pricedRoute.price.model, usage: { ...usage.usage, input_tokens_details: { cache_write_tokens: 6, cached_tokens: 2 } } };
+  const transport = vi.fn<typeof fetch>(async () => new Response(`data: ${JSON.stringify({ type: "response.completed", response: body })}\n\n`, {
+    headers: { "content-type": "text/event-stream", "x-bt-used-endpoint": "OPENAI_API_KEY", "x-bt-cached": "MISS" },
+  }));
+  const receipt = await forwardEvalRequest({ ...f, route: pricedRoute, payload, transport });
+  expect(JSON.parse(transport.mock.calls[0]![1]!.body as string)).toEqual({ ...payload, max_output_tokens: 100, service_tier: "default" });
+  expect(receipt).toMatchObject({ outcome: "succeeded", final: true, costUsd: "0.000138800", usage: { cacheWrite30m: 6, cacheWrite12h: 0,
+    cacheWriteAttribution: { source: "request_policy", version: "openai-prompt-cache-2026-10-20", ttl: "30m" } } });
+  expect(f.receipts.at(-1)).toEqual(receipt);
+  expect(f.ledger.snapshot()).toMatchObject({ knownUsd: "0.000138800", heldUsd: "0.000000000", inflight: 0 });
+});
 it("retains cancelled and provider-error requests as unknown, including repeated retries", async () => {
   const f = await fixture();
   const first = await forwardEvalRequest({ ...f, transport: async () => { throw new Error(route.apiKey); } });

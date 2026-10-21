@@ -88,12 +88,22 @@ For modern OpenAI models, specify both `cacheWrite30mUsdPerMillion` and
 and a complete `rates` object with the same token-rate fields. Above that total
 input threshold (including cache), the estimate uses those rates for the entire
 request. Reservations use the maximum rate across both tiers. Missing cache-write
-counters, missing TTL splits for nonzero writes, and model mismatches remain
+counters, ambiguous TTL splits for nonzero writes, and model mismatches remain
 unknown. Older OpenAI models without these usage fields need separate qualification.
 Write prices are total token prices, not surcharges. Sources:
 [OpenAI caching](https://developers.openai.com/api/docs/guides/prompt-caching),
 [OpenAI prices](https://developers.openai.com/api/docs/pricing), and
 [Claude prices](https://platform.claude.com/docs/en/about-claude/pricing).
+
+For `gpt-5.6-sol`, a response that omits the entire write-TTL breakdown can use
+the actual request's documented implicit cache policy: `prompt_cache_options.ttl`
+or its 30-minute default. This fallback requires a visible input, no explicit
+breakpoints, no stored prompt/conversation/response references, and no compaction.
+The private receipt records `cacheWriteAttribution` with the policy version and
+lifetime. These amounts remain estimates. Provider splits take precedence;
+partial or malformed splits are never repaired. `prompt_cache_retention: "24h"`
+does not imply a 12-hour write lifetime. The gateway does not change cache policy,
+and this fallback does not reprice historical requests or release old holds.
 
 For Braintrust, use `route: "braintrust"`, add the exact `projectId` UUID, and
 provide `BRAINTRUST_API_KEY` securely. Configure project providers named

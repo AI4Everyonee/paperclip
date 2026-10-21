@@ -66,3 +66,48 @@ it("keeps missing modern write counters or missing/inconsistent TTL splits unkno
   const mismatch = modernUsage(); mismatch.usage.input_tokens_details.cache_write_tokens_details.ttl_12h_tokens++;
   expect(normalizeProviderUsage("openai", mismatch).complete).toBe(false);
 });
+
+const policyPrice = { ...modernPrice, model: "gpt-5.6-sol" };
+function requestPolicyReceipt(request: Record<string, unknown> = {}, details: Record<string, unknown> = {}) {
+  const stream = new ProviderUsageAccumulator("openai", { model: policyPrice.model, input: "hello", ...request });
+  stream.observe({ type: "response.completed", response: { model: policyPrice.model, usage: {
+    input_tokens: 12_000, input_tokens_details: { cached_tokens: 4000, cache_write_tokens: 7000, ...details }, output_tokens: 100,
+  } } });
+  return stream.receipt();
+}
+it.each([
+  [{}, "30m", "0.042600000"],
+  [{ prompt_cache_retention: "24h" }, "30m", "0.042600000"],
+  [{ prompt_cache_options: { mode: "implicit", ttl: "12h" } }, "12h", "0.077600000"],
+] as const)("prices omitted write TTLs from a documented visible request policy: %j", (request, ttl, cost) => {
+  const receipt = requestPolicyReceipt(request);
+  expect(receipt).toMatchObject({ final: true, complete: true, cacheWriteAttribution: {
+    source: "request_policy", version: "openai-prompt-cache-2026-10-20", ttl,
+  } });
+  expect(estimateProviderCost(receipt, policyPrice)).toBe(cost);
+});
+it.each([
+  { model: "unqualified-model" }, { previous_response_id: "stored-response" }, { conversation: "stored-conversation" },
+  { prompt: { id: "stored-prompt" } }, { context_management: [] },
+  { input: [{ type: "item_reference", id: "stored-item" }] },
+  { input: [{ type: "compaction", encrypted_content: "opaque" }] },
+  { input: [{ role: "user", content: [{ type: "input_text", text: "hello", prompt_cache_breakpoint: { mode: "explicit", ttl: "12h" } }] }] },
+  { prompt_cache_options: { mode: "explicit" } }, { prompt_cache_options: { ttl: "unknown" } },
+  { prompt_cache_options: { ttl: null } }, { prompt_cache_options: null },
+  { prompt_cache_options: { future_option: true } },
+])("keeps hidden, explicit, or unqualified cache policies unknown: %j", request => {
+  const receipt = requestPolicyReceipt(request);
+  expect(receipt.cacheWriteAttribution).toBeUndefined();
+  expect(estimateProviderCost(receipt, policyPrice)).toBeNull();
+});
+it("prefers provider TTL splits and never repairs malformed or partial provider counters", () => {
+  const reported = requestPolicyReceipt({}, { cache_write_tokens_details: { ttl_30m_tokens: 3000, ttl_12h_tokens: 4000 } });
+  expect(reported.cacheWriteAttribution).toBeUndefined();
+  expect(estimateProviderCost(reported, policyPrice)).toBe("0.062600000");
+  for (const details of [{ cache_write_tokens: undefined }, { cache_write_tokens_details: null },
+    { cache_write_tokens_details: { ttl_30m_tokens: 7000 } }, { cache_write_tokens_details: { ttl_30m_tokens: 7000, ttl_12h_tokens: 1 } }]) {
+    const receipt = requestPolicyReceipt({}, details);
+    expect(receipt.cacheWriteAttribution).toBeUndefined();
+    expect(estimateProviderCost(receipt, policyPrice)).toBeNull();
+  }
+});

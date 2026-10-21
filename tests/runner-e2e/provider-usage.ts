@@ -15,6 +15,27 @@ export interface ProviderUsageReceipt {
   cacheWrite1h?: number;
   cacheWrite30m?: number;
   cacheWrite12h?: number;
+  cacheWriteAttribution?: { source: "request_policy"; version: "openai-prompt-cache-2026-10-20"; ttl: "30m" | "12h" };
+}
+
+function openAiRequestCachePolicy(payload: unknown): { model: string; ttl: "30m" | "12h" } | undefined {
+  const body = row(payload);
+  if (body.model !== "gpt-5.6-sol" || body.previous_response_id !== undefined || body.conversation !== undefined || body.prompt !== undefined
+      || body.context_management !== undefined || !(typeof body.input === "string" || Array.isArray(body.input))) return;
+  const options = row(body.prompt_cache_options);
+  if (body.prompt_cache_options !== undefined && body.prompt_cache_options !== options) return;
+  if (Object.keys(options).some(key => !["mode", "ttl"].includes(key)) || options.mode !== undefined && options.mode !== "implicit") return;
+  const ttl = options.ttl === undefined ? "30m" : options.ttl;
+  if (ttl !== "30m" && ttl !== "12h") return;
+  const hasUnqualifiedInput = (value: unknown): boolean => {
+    if (Array.isArray(value)) return value.some(hasUnqualifiedInput);
+    if (!value || typeof value !== "object") return false;
+    const item = row(value);
+    return "prompt_cache_breakpoint" in item || item.type === "compaction" || item.type === "item_reference"
+      || Object.values(item).some(hasUnqualifiedInput);
+  };
+  if (hasUnqualifiedInput(body.input)) return;
+  return { model: body.model, ttl };
 }
 
 export function normalizeProviderUsage(provider: "openai" | "anthropic", payload: unknown): ProviderUsageReceipt {
@@ -55,7 +76,10 @@ export class ProviderUsageAccumulator {
   private body: Row = {};
   private usage: Row = {};
   private final = false;
-  constructor(readonly provider: "openai" | "anthropic") {}
+  private readonly cachePolicy: ReturnType<typeof openAiRequestCachePolicy>;
+  constructor(readonly provider: "openai" | "anthropic", request?: unknown) {
+    this.cachePolicy = provider === "openai" ? openAiRequestCachePolicy(request) : undefined;
+  }
   observe(event: unknown) {
     const value = row(event);
     if (this.provider === "openai") {
@@ -78,7 +102,17 @@ export class ProviderUsageAccumulator {
       else if (value.type === "message") { this.body = value; this.usage = row(value.usage); this.final = true; }
     }
   }
-  receipt() { return { ...normalizeProviderUsage(this.provider, { ...this.body, usage: this.usage }), final: this.final }; }
+  receipt() {
+    const receipt = normalizeProviderUsage(this.provider, { ...this.body, usage: this.usage });
+    const details = row(this.usage.input_tokens_details);
+    if (this.cachePolicy && receipt.model === this.cachePolicy.model && receipt.complete && receipt.tokens.cachedWrite! > 0
+        && !("cache_write_tokens_details" in details)) {
+      receipt.cacheWrite30m = this.cachePolicy.ttl === "30m" ? receipt.tokens.cachedWrite : 0;
+      receipt.cacheWrite12h = this.cachePolicy.ttl === "12h" ? receipt.tokens.cachedWrite : 0;
+      receipt.cacheWriteAttribution = { source: "request_policy", version: "openai-prompt-cache-2026-10-20", ttl: this.cachePolicy.ttl };
+    }
+    return { ...receipt, final: this.final };
+  }
 }
 
 export interface EvalTokenRates {
