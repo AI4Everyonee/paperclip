@@ -1,5 +1,5 @@
 {
-  "commandDigest": "sha256:6f49e1a37bcde897703701b638dddf010a0b8e2c92c211a30d4a0bd41e48e77d",
+  "commandDigest": "sha256:7fbf0b3a48250c0c1852503d0dfd0af238c402d19c53573b573cc81f07c6016f",
   "declaration": {
     "schema": "paperclip.acpx_profile_declaration.v1",
     "agent": "copilot",
@@ -26,10 +26,10 @@
     "permissionClassifierSourceSha256": "1161eabd82e26133e3b3db3ab567f65d52808b03f176e93497e02c8330349fb4",
     "semanticToolReceiptContract": "paperclip.semantic_tool_receipt.v2",
     "semanticReceiptSourceSha256": "b2795726b2234a663fec1a6ca11f0551ae69882fe9e82aa39686e952d036e791",
-    "semanticBridgeSourceSha256": "89e3dde25ff35bfd4d7f520fd9d14af3cb9027f182a2d51431d298f1015be580",
+    "semanticBridgeSourceSha256": "8823475a90f5da3477e86eb2d4d5a221733f1dda7117d0f6ff00e3b6bebabf6b",
     "toolEvidenceSourceSha256": "6eef5039afc75bb851eaf9cd82a6f099e4bd398ca2deb59dd66f5b2a81a7a706",
     "semanticNormalizedInputContract": "validated-forwarded-input-commit-v1",
-    "semanticSidecarSourceSha256": "cc90b59bdfe6a82f7fa3e819e8671f71f7b14047e68942e8086618ffbaacf59f",
+    "semanticSidecarSourceSha256": "6165e9c3e544c6991b2703ba406f83617d3a939d988355da9d46eded09c4679a",
     "semanticDirectDriverSourceSha256": "ff572638f2cb5d9f8249ff8e2f412311c1e3af209ef0bf7e5ea9f10a21d91103",
     "semanticValidationSourceSha256": "02fbb92681c78c5de5d2f1aae25aabc25a0e5df6b0ff4baccac652192a8da975",
     "semanticNormalizationSourceSha256": "8b628b82e8eacc91cdcc6fdca2210ba4cf282f01e9c6f74e95ff271655b5047e",
@@ -75,7 +75,7 @@
     "metadataProbeSourceSha256": "be4c8416edd27061109bc1f33d0c26071b4facbb3f651beaae6b3c0275cce727",
     "permissionToolIdentitySourceSha256": "770b47305e571a81f344883057d0e4a482a1cd59ac77d045836593a8e739deb1",
     "semanticContinuationSourceSha256": "d248e47a0fe7f2536d1e64cea0b0b410f34104800cd643d995b4473104ecc8e0",
-    "runtimeHostSourceSha256": "60e5454f030e87f2afa8b1fb120b26adb126b6b17d0e5e82f49c77f76f466cbb",
+    "runtimeHostSourceSha256": "94a73749267f5a80b5df19413a65b4b9263c00a9bf7e98fda00f00b8f9fd32ec",
     "runtimeAdapterSourceSha256": "e4c764c2c3c7dd655a965b39472bd1ad8d577d1e7258b25594b171c9429752b8",
     "runtimeSandboxSourceSha256": "92dfa53f5a3ed0062913ae417eeccec243b430d444495efde2a8e9c4c02e78ea",
     "cancellationSourceSha256": "a07d1a9e982dec0ae130c1ad1efa5bc75c6a39e013b730ba3ee45256f09ceeca",
