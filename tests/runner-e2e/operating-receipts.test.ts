@@ -107,6 +107,27 @@ it("rejects separate partial windows and accounts for their cumulative total bef
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
+it.each(["partial", "complete"] as const)("rejects a larger cumulative estimate hidden by an earlier %s invoice", async coverage => {
+  const { directory, ledgerPath } = await fixture("4.5");
+  try {
+    await importOperatingReceipt(ledgerPath, receipt({ source: "invoice", classification: "reconciled", costUsd: "0.8", coverage }), evidence);
+    const before = await readFile(ledgerPath, "utf8"), retained = await readdir(`${ledgerPath}.overhead`);
+    await expect(importOperatingReceipt(ledgerPath, receipt({ costUsd: "1.6", coverage,
+      windowEndedAt: "2026-10-03T00:00:00Z" }), evidence)).rejects.toThrow("would understate the cumulative total");
+    expect(await readFile(ledgerPath, "utf8")).toBe(before);
+    expect(await readdir(`${ledgerPath}.overhead`)).toEqual(retained);
+    const updated = await importOperatingReceipt(ledgerPath, receipt({ source: "invoice", classification: "reconciled", costUsd: "1.6", coverage,
+      windowEndedAt: "2026-10-03T00:00:00Z" }), evidence);
+    expect(updated).toMatchObject({ knownUsd: "1.600000000", committedUsd: "4.600000000", overBudget: true });
+    const loaded = await readEvalCostLedger(ledgerPath), writer = await openEvalCostLedger(ledgerPath, loaded.state.limits);
+    try {
+      await writer.admitAttempt("fixture-cell", "next");
+      await expect(writer.reserve("next", { executionId: "fixture-cell", attemptId: "next", phase: "agent" }, "0.01"))
+        .rejects.toThrow(coverage === "complete" ? "receipts conflict" : "spending cap reached");
+    } finally { await writer.close(); }
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
 it.each(["evidence", "receipt.json"])("retries must persist the existing %s file before recording its charge", async suffix => {
   const { directory, ledgerPath } = await fixture();
   const before = await readFile(ledgerPath, "utf8"), originalOpen = (await vi.importActual<typeof fs>("node:fs/promises")).open;
