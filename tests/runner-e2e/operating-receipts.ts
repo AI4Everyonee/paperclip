@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { link, mkdir, open, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { usdToUnits } from "../../packages/shared/src/money.js";
 import { openEvalCostLedger, readEvalCostLedger, validEvalLedgerId, type EvalCostObservation } from "./cost-ledger.js";
 import { EVAL_OVERHEAD_COMPONENTS, type EvalOperatingOverhead } from "./operating-overhead.js";
 import { collectGitHubOperatingUsage } from "./github-operating-usage.js";
@@ -81,7 +82,8 @@ export async function importOperatingReceipt(ledgerPath: string, receipt: EvalOp
   try {
     const directory = `${ledgerPath}.overhead`;
     const current = (await readEvalCostLedger(ledgerPath)).state;
-    if (!current.observations.has(observation.observationId)) {
+    const alreadyImported = current.observations.has(observation.observationId);
+    if (!alreadyImported) {
       for (const previous of current.observations.values()) {
         if (previous.requestId !== observation.requestId) continue;
         if (!/^operating-receipt:[a-f0-9]{64}$/.test(previous.observationId)) {
@@ -98,6 +100,13 @@ export async function importOperatingReceipt(ledgerPath: string, receipt: EvalOp
           throw new Error("Operating receipts must cover one cumulative component window; combine separate charges before importing");
         }
       }
+      // Preview the ledger's own precedence rules before retaining or appending a receipt.
+      current.validate({ type: "observe", observation });
+      current.apply({ type: "observe", observation });
+      const counted = current.snapshot().requests.find(request => request.requestId === observation.requestId)?.costUsd;
+      if (observation.costUsd !== undefined && (counted == null || usdToUnits(counted) < usdToUnits(observation.costUsd))) {
+        throw new Error("Operating receipt would understate the cumulative total; reconcile the entire component window before importing");
+      }
     }
     await mkdir(directory, { recursive: true, mode: 0o700 });
     await retain(path.join(directory, `${receipt.evidenceSha256}.evidence`), evidence);
@@ -106,7 +115,7 @@ export async function importOperatingReceipt(ledgerPath: string, receipt: EvalOp
       const directoryHandle = await open(durableDirectory, "r");
       try { await directoryHandle.sync(); } finally { await directoryHandle.close(); }
     }
-    if (!current.observations.has(observation.observationId)) await ledger.observe(observation);
+    if (!alreadyImported) await ledger.observe(observation);
     return ledger.snapshot();
   } finally { await ledger.close(); }
 }
