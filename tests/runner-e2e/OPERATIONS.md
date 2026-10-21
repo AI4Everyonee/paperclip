@@ -284,6 +284,10 @@ evidence before importing their total; two separate $0.80 charges require a
 cumulative $1.60 receipt. Version 1 receipts lacked this declaration and are
 rejected on import. Existing journal records are preserved; the importer also
 refuses to extend a component whose prior receipts lack cumulative evidence.
+It also checks the ledger's precedence rules before import: a larger cumulative
+estimate cannot be hidden by an earlier, smaller invoice. Such imports fail
+without changing retained evidence or the journal; reconcile the entire expanded
+window with evidence the ledger can account for before retrying.
 
 The importer validates campaign/allowance identity and source hash, retains both
 files privately under `ledger.jsonl.overhead/`, and syncs them before appending
