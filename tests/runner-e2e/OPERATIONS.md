@@ -322,7 +322,10 @@ refuses to extend a component whose prior receipts lack cumulative evidence.
 
 The importer validates campaign/allowance identity and source hash, retains both
 files privately under `ledger.jsonl.overhead/`, and syncs them before appending
-the observation. Retries sync matching existing files too. Reimporting an identical
+the observation. Files are written and synced under unique temporary names, then
+published atomically without replacing existing evidence. A partial write is
+removed without occupying the final path, so retry needs no manual repair.
+Retries sync matching existing files too. Reimporting an identical
 receipt adds no journal entry. A partial amount
 keeps the rest of the allowance held. Complete invoices can supersede estimates;
 conflicting complete invoices remain visible and block admission. This command

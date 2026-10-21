@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import * as fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -110,6 +110,11 @@ it("rejects separate partial windows and accounts for their cumulative total bef
 it.each(["evidence", "receipt.json"])("retries must persist the existing %s file before recording its charge", async suffix => {
   const { directory, ledgerPath } = await fixture();
   const before = await readFile(ledgerPath, "utf8"), originalOpen = (await vi.importActual<typeof fs>("node:fs/promises")).open;
+  const value = receipt(), canonical = Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)));
+  const observation = operatingReceiptObservation(value, "fixture", overhead, evidence, now);
+  await mkdir(`${ledgerPath}.overhead`, { mode: 0o700 });
+  await writeFile(path.join(`${ledgerPath}.overhead`, suffix === "evidence" ? `${value.evidenceSha256}.evidence`
+    : `${observation.observationId.split(":")[1]}.receipt.json`), suffix === "evidence" ? evidence : `${JSON.stringify(canonical, null, 2)}\n`, { mode: 0o600 });
   let syncs = 0;
   const opened = vi.mocked(fs.open).mockImplementation(async (...args) => {
     const handle = await originalOpen(...args);
@@ -129,6 +134,35 @@ it.each(["evidence", "receipt.json"])("retries must persist the existing %s file
     }
     expect(await importOperatingReceipt(ledgerPath, receipt(), evidence)).toMatchObject({ knownUsd: "0.200000000", heldUsd: "3.800000000" });
     expect(syncs).toBe(3);
+  } finally {
+    opened.mockImplementation(originalOpen);
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+it.each(["evidence", "receipt.json"])("recovers an incomplete %s write without publishing corrupt evidence or requiring manual deletion", async suffix => {
+  const { directory, ledgerPath } = await fixture();
+  const before = await readFile(ledgerPath, "utf8"), originalOpen = (await vi.importActual<typeof fs>("node:fs/promises")).open;
+  let injected = false;
+  const opened = vi.mocked(fs.open).mockImplementation(async (...args) => {
+    const handle = await originalOpen(...args);
+    if (!injected && String(args[0]).includes(`.${suffix}.`) && String(args[0]).endsWith(".tmp")) {
+      const originalWrite = handle.writeFile.bind(handle);
+      vi.spyOn(handle, "writeFile").mockImplementation(async () => {
+        injected = true;
+        await originalWrite("partial");
+        throw new Error("fixture partial write");
+      });
+    }
+    return handle;
+  });
+  try {
+    await expect(importOperatingReceipt(ledgerPath, receipt(), evidence)).rejects.toThrow("partial write");
+    expect(injected).toBe(true);
+    expect(await readFile(ledgerPath, "utf8")).toBe(before);
+    expect((await readdir(`${ledgerPath}.overhead`)).some(name => name.endsWith(`.${suffix}`) || name.endsWith(".tmp"))).toBe(false);
+    expect(await importOperatingReceipt(ledgerPath, receipt(), evidence)).toMatchObject({ knownUsd: "0.200000000", heldUsd: "3.800000000" });
+    expect(await readdir(`${ledgerPath}.overhead`)).toHaveLength(2);
   } finally {
     opened.mockImplementation(originalOpen);
     await rm(directory, { recursive: true, force: true });
