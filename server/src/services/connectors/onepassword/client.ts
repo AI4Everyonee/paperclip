@@ -62,7 +62,7 @@ export async function callOnePassword(headers: Record<string, string>, tool: str
 }
 
 export function executeOnePasswordTool(input: {
-  binding: { companyId: string; agentId: string }; connection: { companyId: string };
+  binding: { companyId: string; agentId?: string | null }; connection: { companyId: string };
   headers: Record<string, string>; toolName: string; parameters: unknown; deadlineAt?: number; signal?: AbortSignal;
 }) {
   if (!input.binding.agentId || input.binding.companyId !== input.connection.companyId) {

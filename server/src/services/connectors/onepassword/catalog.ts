@@ -40,7 +40,7 @@ export function onePasswordRisk(name: string): "read" | "write" | "destructive" 
   return operations.find(operation => operation.name === name)?.risk ?? "destructive";
 }
 
-const contracts = new Map(ONEPASSWORD_TOOLS.map(tool => [tool.name, {
+const contracts = new Map<string, { versionHash: string; schemaHash: string; riskLevel: "read" | "write" | "destructive" }>(ONEPASSWORD_TOOLS.map(tool => [tool.name, {
   versionHash: descriptorHash(tool, onePasswordRisk(tool.name)), schemaHash: stableHash(tool.inputSchema), riskLevel: onePasswordRisk(tool.name),
 }]));
 export const isOnePasswordToolName = (name: string) => contracts.has(name);

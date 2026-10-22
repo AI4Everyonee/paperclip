@@ -11,7 +11,7 @@ const live = process.env.PAPERCLIP_ONEPASSWORD_LIVE === "1";
 const fixtureState = vi.hoisted(() => ({ calls: 0, items: new Map<string, Record<string, unknown>>() }));
 vi.mock("../services/connectors/onepassword/client.js", async importOriginal => {
   const actual = await importOriginal<typeof import("../services/connectors/onepassword/client.js")>();
-  return { ...actual, callOnePassword: async (headers: Record<string, string>, tool: string, parameters: unknown, ms?: number) => {
+  const callOnePassword = async (headers: Record<string, string>, tool: string, parameters: unknown, ms?: number) => {
     if (process.env.PAPERCLIP_ONEPASSWORD_LIVE === "1") return actual.callOnePassword(headers, tool, parameters, ms);
     const { onePasswordArguments } = await import("../services/connectors/onepassword/catalog.js");
     const args = onePasswordArguments(tool, parameters);
@@ -30,7 +30,10 @@ vi.mock("../services/connectors/onepassword/client.js", async importOriginal => 
     if (tool === "onepassword_resolve_secret") return { value: "disposable-secret" };
     if (tool === "onepassword_delete_item") fixtureState.items.delete(String(args.itemId));
     return { success: true };
-  } };
+  };
+  return { ...actual, callOnePassword, executeOnePasswordTool: (input: Parameters<typeof actual.executeOnePasswordTool>[0]) =>
+    process.env.PAPERCLIP_ONEPASSWORD_LIVE === "1" ? actual.executeOnePasswordTool(input)
+      : callOnePassword(input.headers, input.toolName, input.parameters) };
 });
 
 const support = await getEmbeddedPostgresTestSupport();
