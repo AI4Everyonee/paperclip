@@ -139,6 +139,12 @@ and [Data API access](https://supabase.com/docs/reference/api/v1-get-postgrest-s
    [Supabase access tokens](https://supabase.com/dashboard/account/tokens) with
    permissions for the intended actions. A project publishable, anon,
    `service_role`, or secret API key cannot replace this PAT.
+   For all native actions, scope it to the selected project and grant Read-write
+   for **Project Settings**, **Auth Config**, **Data API Config**, **Edge Functions**,
+   and **Edge Function Secrets**. Auth updates need both Project Settings and
+   Auth Config. Data API JWT Secret access is unnecessary for the non-secret
+   configuration fields. Use a short expiry and revoke the token after temporary
+   verification. See the [scoped PAT permission guide](https://supabase.com/docs/guides/platform/personal-access-tokens).
 3. For native deployment/configuration, copy the existing project's reference
    from Project Settings. The saved reference is the execution boundary and
    cannot be overridden by tool arguments. For MCP project creation, leave the
@@ -167,13 +173,51 @@ provider failures, bounded reads and uncertain-write behavior. Shared connection
 tests cover the vault and governed run gateway. Fixtures do not establish
 provider account authorization.
 
-Public metadata preflight passed on 2026-10-22, without credentials or client
-registration. No Supabase credential was available for this task. Account-bound
-OAuth/PAT consent, deployment/configuration, refresh/revoke, and real provider
-agent-run proof remain unrun. No paid or production resource was created or
-modified. The permission review records retain `liveProof: not-run`.
+Public metadata preflight passed on 2026-10-22. Live source verification then used
+an isolated `worktree init --empty` instance on macOS arm64, Node 26.4.0, with
+synthetic company `DEP` at `http://127.0.0.1:4391`. The normal CLI started the
+instance with its own embedded PostgreSQL. Its supported worktree run setting
+was explicitly enabled for the proof; no default or production database was used.
+
+The Apps UI showed all three methods, optional Advanced project pinning for MCP,
+and the required project pin for native REST. Real browser OAuth consent completed
+and discovery returned 29 MCP actions (18 read and 11 write). A real process-agent
+run through the governed gateway created one disposable project after the provider
+quoted $0/month. The project reached `ACTIVE_HEALTHY`; successful run ID:
+`560aa4eb-237d-4b52-8d44-d23d9aab3f57`.
+
+The first live harness run misread the provider's wrapped organization result;
+normalizing that result resolved the harness failure. A duplicate queued wake
+later attempted the same project creation and was rejected by the provider. The
+harness gained a one-shot guard, and the Dashboard confirmed exactly one new
+proof project. These earlier failures remain part of the verification evidence.
+
+Native setup then vaulted a 24-hour scoped PAT limited to that project and the
+five documented permission groups. Discovery exposed eleven actions. Real
+process-agent run `9eede77a-2360-4710-b473-4688242062e3` changed and read back Auth
+and Data API settings, wrote an environment secret without returning its value,
+deployed an Edge Function, and read its `ACTIVE` status. Its public HTTP response
+was 200 with the expected hello marker and `secretConfigured: true`.
+
+That run remained failed because its configuration cleanup received a provider
+server error and an immediate stale read. Subsequent read-only connector calls
+confirmed the original `site_url` and `max_rows` were restored, without another
+write. The connector now marks provider server errors after writes as uncertain
+outcomes and tells callers to inspect state before retrying. The regression test
+also covers an applied configuration change followed by a server error; the
+provider suite passes all 30 tests. A subsequent actual process-agent cleanup run,
+`ba60f6a7-bade-42d6-9a82-1cc12144589b`, succeeded: it confirmed both original
+settings, deleted the function, and verified its absence from the function list.
+The original failed run and successful reconciliation are retained separately.
+
+Disposable project deletion, temporary token revocation, reconnect, and local
+connection removal remain pending final cleanup. The project deletion also
+removes the disposable environment secret. No paid upgrade or production
+resource was created or modified.
 
 Sensitive tool arguments such as `secretValue` are encrypted in newly created
 approval payloads with the instance tool-action signing secret. Approval summaries
 and audit still use redacted values. Existing signed approval records remain
-readable and are not rewritten; back up the instance signing key with the database.
+readable and are not rewritten. Sensitive request identities also use this key
+to distinguish secret replacements without storing guessable secret hashes.
+Key rotation can invalidate retry matching; back up the signing key with the database.

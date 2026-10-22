@@ -191,6 +191,25 @@ describe("Supabase deployment and configuration", () => {
     expect(request).toHaveBeenCalledTimes(1);
   });
 
+  it("treats a provider server error after an applied configuration write as uncertain", async () => {
+    let maxRows = 901;
+    const request = vi.fn(async (_url: string, init: RequestInit) => {
+      if (init.method === "PATCH") {
+        maxRows = JSON.parse(String(init.body)).max_rows;
+        return new Response(`restart failed ${token}`, { status: 500 });
+      }
+      return Response.json({ max_rows: maxRows });
+    });
+    const client = supabaseClient(headers, request, projectRef);
+    const result = await failure(client.invoke("supabase_update_api_config", { config: { max_rows: 1000 } }));
+    expect(result).toMatchObject({ status: 502, details: { code: "supabase_outcome_unknown" } });
+    expect(result.message).toContain("inspect its state before retrying");
+    expect(result.message).not.toContain(token);
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(await client.invoke("supabase_get_api_config", {})).toEqual({ max_rows: 1000 });
+    expect(request.mock.calls.filter(([, init]) => init.method === "PATCH")).toHaveLength(1);
+  });
+
   it("bounds a stalled body reader without blocking an unrelated request", async () => {
     const controller = new AbortController();
     const slow = supabaseClient(headers, async () => new Response(new ReadableStream({ pull: () => new Promise(() => {}) })), projectRef, controller.signal, Date.now() + 20);

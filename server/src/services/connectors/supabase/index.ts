@@ -131,6 +131,11 @@ export function supabaseClient(headers: Record<string, string>, request: Supabas
     }
     if (!response.ok) {
       void response.body?.cancel().catch(() => {});
+      // Configuration may be applied before the provider reports a restart
+      // failure. A server error is not proof that a write had no effect.
+      if (method !== "GET" && (response.status >= 500 || response.status === 408)) {
+        throw fail(502, "supabase_outcome_unknown", "Supabase reported an error after this write. The operation may have completed; inspect its state before retrying.");
+      }
       const status = [400, 401, 402, 403, 404, 409, 422, 429].includes(response.status) ? response.status : 502;
       throw fail(status, "supabase_request_failed", status === 401 || status === 403
         ? "Supabase denied access. Reconnect with a personal access token authorized for this project and action."
