@@ -163,20 +163,50 @@ describe("Vercel deployment connector", () => {
   });
 
   it("expires slow prerequisites without a late write and keeps other requests responsive", async () => {
-    let finish!: (response: Response) => void;
-    const request = vi.fn<VercelRequest>(() => new Promise(resolve => { finish = resolve; }));
-    const pending = vercelClient(headers, request, teamId, new AbortController().signal, Date.now() + 30)
-      .invoke("vercel_delete_project", { projectId: project.id });
-    const assertion = expect(pending).rejects.toMatchObject({ status: 504 });
-    expect(await fixture(() => json({ id: teamId })).client.probe()).toEqual({ teamId });
-    await assertion;
-    finish(json(project));
-    await Promise.resolve();
-    expect(request).toHaveBeenCalledTimes(1);
+    vi.useFakeTimers();
+    try {
+      let finish!: (response: Response) => void;
+      let markStarted!: () => void;
+      const started = new Promise<void>(resolve => { markStarted = resolve; });
+      const request = vi.fn<VercelRequest>(() => new Promise(resolve => {
+        finish = resolve;
+        markStarted();
+      }));
+      const pending = vercelClient(headers, request, teamId, new AbortController().signal, Date.now() + 30)
+        .invoke("vercel_delete_project", { projectId: project.id });
+      const assertion = expect(pending).rejects.toMatchObject({ status: 504 });
+      await started;
+      expect(await fixture(() => json({ id: teamId })).client.probe()).toEqual({ teamId });
+      await vi.advanceTimersByTimeAsync(30);
+      await assertion;
+      finish(json(project));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(request).toHaveBeenCalledTimes(1);
+      expect(request.mock.calls[0]![1].method).toBe("GET");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("bounds a response stream even if its reader stalls", async () => {
-    const request = vi.fn<VercelRequest>(async () => new Response(new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode("{")); } })));
-    await expect(vercelClient(headers, request, teamId, new AbortController().signal, Date.now() + 20).probe()).rejects.toMatchObject({ status: 504 });
+    vi.useFakeTimers();
+    try {
+      let markStarted!: () => void;
+      const started = new Promise<void>(resolve => { markStarted = resolve; });
+      const request = vi.fn<VercelRequest>(async () => new Response(new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("{"));
+          markStarted();
+        },
+      })));
+      const pending = vercelClient(headers, request, teamId, new AbortController().signal, Date.now() + 20).probe();
+      const assertion = expect(pending).rejects.toMatchObject({ status: 504 });
+      await started;
+      await vi.advanceTimersByTimeAsync(20);
+      await assertion;
+      expect(request).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -100,7 +100,7 @@
       ],
       "reviewedAt": "2026-09-30",
       "liveProof": "not-run",
-      "keyPermissions": "Actions depend on the operator-supplied API and key; grant read/write on the required resources at the provider. Create a key with read and write permissions for these actions; Paperclip cannot increase an existing key’s permissions.",
+      "keyPermissions": "Actions depend on the operator-supplied API and key; grant read/write on the required resources at the provider. Create a key with read and write permissions for these actions; Paperclip cannot increase an existing key\u2019s permissions.",
       "evidenceLimit": "Provider documentation was unavailable or not readable during this review; metadata/registered source only. Account-bound proof remains outstanding."
     },
     {
@@ -205,7 +205,7 @@
       ],
       "reviewedAt": "2026-10-09",
       "liveProof": "not-run",
-      "keyPermissions": "A Bitly API token from Settings → API is documented for MCP bearer auth, but no restriction scope is documented; treat it as capable of the full MCP catalog under that account. Paperclip cannot narrow the token."
+      "keyPermissions": "A Bitly API token from Settings \u2192 API is documented for MCP bearer auth, but no restriction scope is documented; treat it as capable of the full MCP catalog under that account. Paperclip cannot narrow the token."
     },
     {
       "app": "box",
@@ -273,7 +273,7 @@
       ],
       "reviewedAt": "2026-09-30",
       "liveProof": "not-run",
-      "keyPermissions": "Create/stop browser sessions and run browser tasks under the API key. Create a key with read and write permissions for these actions; Paperclip cannot increase an existing key’s permissions."
+      "keyPermissions": "Create/stop browser sessions and run browser tasks under the API key. Create a key with read and write permissions for these actions; Paperclip cannot increase an existing key\u2019s permissions."
     },
     {
       "app": "candid",
@@ -347,7 +347,7 @@
       ],
       "reviewedAt": "2026-09-30",
       "liveProof": "not-run",
-      "keyPermissions": "Cloudflare API actions selected at provider consent or on the API token. Identity scopes alone do not grant account writes. Create a key with read and write permissions for these actions; Paperclip cannot increase an existing key’s permissions."
+      "keyPermissions": "Cloudflare API actions selected at provider consent or on the API token. Identity scopes alone do not grant account writes. Create a key with read and write permissions for these actions; Paperclip cannot increase an existing key\u2019s permissions."
     },
     {
       "app": "cloudinary",
@@ -403,7 +403,7 @@
       ],
       "reviewedAt": "2026-09-30",
       "liveProof": "not-run",
-      "keyPermissions": "Modify documents/tables permitted by the account. Create a key with read and write permissions for these actions; Paperclip cannot increase an existing key’s permissions."
+      "keyPermissions": "Modify documents/tables permitted by the account. Create a key with read and write permissions for these actions; Paperclip cannot increase an existing key\u2019s permissions."
     },
     {
       "app": "cognee",
@@ -418,7 +418,7 @@
       ],
       "reviewedAt": "2026-09-30",
       "liveProof": "not-run",
-      "keyPermissions": "Add/process knowledge and manage authorized datasets. Create a key with read and write permissions for these actions; Paperclip cannot increase an existing key’s permissions."
+      "keyPermissions": "Add/process knowledge and manage authorized datasets. Create a key with read and write permissions for these actions; Paperclip cannot increase an existing key\u2019s permissions."
     },
     {
       "app": "composio",
@@ -612,7 +612,7 @@
       ],
       "reviewedAt": "2026-09-30",
       "liveProof": "not-run",
-      "keyPermissions": "Use an API key for an account with write access to the meetings your agents need to share, rename, move or turn into soundbites. Paperclip cannot increase the key’s permissions."
+      "keyPermissions": "Use an API key for an account with write access to the meetings your agents need to share, rename, move or turn into soundbites. Paperclip cannot increase the key\u2019s permissions."
     },
     {
       "app": "gauge",
@@ -677,7 +677,7 @@
       ],
       "reviewedAt": "2026-09-30",
       "liveProof": "not-run",
-      "keyPermissions": "Repository contents, issues, pull requests and other granted toolsets; selected repos and installation/PAT permissions apply. Create a key with read and write permissions for these actions; Paperclip cannot increase an existing key’s permissions.",
+      "keyPermissions": "Repository contents, issues, pull requests and other granted toolsets; selected repos and installation/PAT permissions apply. Create a key with read and write permissions for these actions; Paperclip cannot increase an existing key\u2019s permissions.",
       "evidenceLimit": "Provider documentation was unavailable or not readable during this review; metadata/registered source only. Account-bound proof remains outstanding."
     },
     {
@@ -1409,7 +1409,7 @@
       ],
       "reviewedAt": "2026-09-30",
       "liveProof": "not-run",
-      "keyPermissions": "Launch/manage browsers, profiles, apps and browser automation. Create a key with read and write permissions for these actions; Paperclip cannot increase an existing key’s permissions."
+      "keyPermissions": "Launch/manage browsers, profiles, apps and browser automation. Create a key with read and write permissions for these actions; Paperclip cannot increase an existing key\u2019s permissions."
     },
     {
       "app": "linear",
@@ -1498,7 +1498,7 @@
       ],
       "reviewedAt": "2026-09-30",
       "liveProof": "not-run",
-      "keyPermissions": "Add/update/delete memories under the API key account. Create a key with read and write permissions for these actions; Paperclip cannot increase an existing key’s permissions."
+      "keyPermissions": "Add/update/delete memories under the API key account. Create a key with read and write permissions for these actions; Paperclip cannot increase an existing key\u2019s permissions."
     },
     {
       "app": "miro",
@@ -1613,7 +1613,7 @@
       ],
       "reviewedAt": "2026-10-02",
       "liveProof": "not-run",
-      "keyPermissions": "Project, branch, compute, snapshot, SQL and schema changes within the key’s reach. A project-scoped key limits access to one project with Editor rights; personal and organization keys reach every project they can access. Paperclip cannot increase an existing key’s permissions."
+      "keyPermissions": "Project, branch, compute, snapshot, SQL and schema changes within the key\u2019s reach. A project-scoped key limits access to one project with Editor rights; personal and organization keys reach every project they can access. Paperclip cannot increase an existing key\u2019s permissions."
     },
     {
       "app": "notion",
@@ -1695,7 +1695,7 @@
       ],
       "reviewedAt": "2026-09-30",
       "liveProof": "not-run",
-      "keyPermissions": "Incident and on-call changes require a full-access API key and role access. Create a key with read and write permissions for these actions; Paperclip cannot increase an existing key’s permissions."
+      "keyPermissions": "Incident and on-call changes require a full-access API key and role access. Create a key with read and write permissions for these actions; Paperclip cannot increase an existing key\u2019s permissions."
     },
     {
       "app": "pagerduty",
@@ -1710,7 +1710,7 @@
       ],
       "reviewedAt": "2026-09-30",
       "liveProof": "not-run",
-      "keyPermissions": "Incident and on-call changes require a full-access API key and role access. Create a key with read and write permissions for these actions; Paperclip cannot increase an existing key’s permissions."
+      "keyPermissions": "Incident and on-call changes require a full-access API key and role access. Create a key with read and write permissions for these actions; Paperclip cannot increase an existing key\u2019s permissions."
     },
     {
       "app": "planetscale",
@@ -1781,7 +1781,7 @@
       ],
       "reviewedAt": "2026-09-30",
       "liveProof": "not-run",
-      "keyPermissions": "Analytics objects, feature flags, experiments, error triage and other enabled product actions. readonly/feature/tool filters remain enforced. Create a key with read and write permissions for these actions; Paperclip cannot increase an existing key’s permissions."
+      "keyPermissions": "Analytics objects, feature flags, experiments, error triage and other enabled product actions. readonly/feature/tool filters remain enforced. Create a key with read and write permissions for these actions; Paperclip cannot increase an existing key\u2019s permissions."
     },
     {
       "app": "postman",
@@ -1849,7 +1849,7 @@
       ],
       "reviewedAt": "2026-09-30",
       "liveProof": "not-run",
-      "keyPermissions": "Collection/workspace/API actions supported by the selected minimal/code/full endpoint and account role. Create a key with read and write permissions for these actions; Paperclip cannot increase an existing key’s permissions."
+      "keyPermissions": "Collection/workspace/API actions supported by the selected minimal/code/full endpoint and account role. Create a key with read and write permissions for these actions; Paperclip cannot increase an existing key\u2019s permissions."
     },
     {
       "app": "postman",
@@ -1866,7 +1866,7 @@
       ],
       "reviewedAt": "2026-09-30",
       "liveProof": "not-run",
-      "keyPermissions": "Collection/workspace/API actions supported by the selected minimal/code/full endpoint and account role. Create a key with read and write permissions for these actions; Paperclip cannot increase an existing key’s permissions."
+      "keyPermissions": "Collection/workspace/API actions supported by the selected minimal/code/full endpoint and account role. Create a key with read and write permissions for these actions; Paperclip cannot increase an existing key\u2019s permissions."
     },
     {
       "app": "postman",
@@ -1883,7 +1883,7 @@
       ],
       "reviewedAt": "2026-09-30",
       "liveProof": "not-run",
-      "keyPermissions": "Collection/workspace/API actions supported by the selected minimal/code/full endpoint and account role. Create a key with read and write permissions for these actions; Paperclip cannot increase an existing key’s permissions."
+      "keyPermissions": "Collection/workspace/API actions supported by the selected minimal/code/full endpoint and account role. Create a key with read and write permissions for these actions; Paperclip cannot increase an existing key\u2019s permissions."
     },
     {
       "app": "railway",
@@ -1937,7 +1937,7 @@
       ],
       "reviewedAt": "2026-09-30",
       "liveProof": "not-run",
-      "keyPermissions": "Provider-authorized payment/account tools; financial policy gates remain. Live verification outstanding. Create a key with read and write permissions for these actions; Paperclip cannot increase an existing key’s permissions.",
+      "keyPermissions": "Provider-authorized payment/account tools; financial policy gates remain. Live verification outstanding. Create a key with read and write permissions for these actions; Paperclip cannot increase an existing key\u2019s permissions.",
       "evidenceLimit": "Provider documentation was unavailable or not readable during this review; metadata/registered source only. Account-bound proof remains outstanding."
     },
     {
@@ -1992,7 +1992,7 @@
       ],
       "reviewedAt": "2026-09-30",
       "liveProof": "not-run",
-      "keyPermissions": "Edit content permitted by project role; global is MCP authorization, not a bypass of project ACLs. Create a key with read and write permissions for these actions; Paperclip cannot increase an existing key’s permissions."
+      "keyPermissions": "Edit content permitted by project role; global is MCP authorization, not a bypass of project ACLs. Create a key with read and write permissions for these actions; Paperclip cannot increase an existing key\u2019s permissions."
     },
     {
       "app": "sentry",
@@ -2139,7 +2139,52 @@
       ],
       "reviewedAt": "2026-09-30",
       "liveProof": "not-run",
-      "keyPermissions": "Account- and sandbox-specific writes selected during Stripe consent; financial approvals and restricted-key permissions remain. Create a key with read and write permissions for these actions; Paperclip cannot increase an existing key’s permissions."
+      "keyPermissions": "Account- and sandbox-specific writes selected during Stripe consent; financial approvals and restricted-key permissions remain. Create a key with read and write permissions for these actions; Paperclip cannot increase an existing key\u2019s permissions."
+    },
+    {
+      "app": "supabase",
+      "method": "mcp-oauth",
+      "auth": "oauth",
+      "policy": "explicit",
+      "requestedScopes": [
+        "organizations:read",
+        "projects:read",
+        "projects:write",
+        "database:write",
+        "database:read",
+        "analytics:read",
+        "secrets:read",
+        "edge_functions:read",
+        "edge_functions:write",
+        "environment:read",
+        "environment:write",
+        "storage:read",
+        "storage:write"
+      ],
+      "capability": "write",
+      "supportedActions": "Unpinned connections can list/create/pause/restore projects and use account cost tools. Hosted MCP supports SQL/migrations, Edge Function deployment, branches and opt-in storage configuration. A project_ref disables account tools. Read-only mode and token permissions remain authoritative. Auth and Data API configuration use the separate Management API method.",
+      "evidence": [
+        "https://supabase.com/docs/guides/ai-tools/mcp",
+        "https://mcp.supabase.com/.well-known/oauth-protected-resource/mcp"
+      ],
+      "reviewedAt": "2026-10-22",
+      "liveProof": "2026-10-22: Real browser OAuth in an isolated Paperclip instance discovered 29 MCP tools. An actual process-agent gateway run listed organizations, obtained a zero-monthly-cost quote and confirmation, and created one disposable project that reached ACTIVE_HEALTHY. A read-only reconciliation found exactly one proof project. Dashboard cleanup deleted that project. Earlier harness parsing/duplicate-wake failures are documented in SUPABASE.md. MCP token authentication and all SQL/branch/storage capabilities were not live-tested."
+    },
+    {
+      "app": "supabase",
+      "method": "mcp-api-key",
+      "auth": "api_key",
+      "policy": "provider-key",
+      "requestedScopes": [],
+      "capability": "provider-controlled",
+      "supportedActions": "Unpinned connections can list/create/pause/restore projects and use account cost tools. Hosted MCP supports SQL/migrations, Edge Function deployment, branches and opt-in storage configuration. A project_ref disables account tools. Read-only mode and token permissions remain authoritative. Auth and Data API configuration use the separate Management API method.",
+      "evidence": [
+        "https://supabase.com/docs/guides/ai-tools/mcp",
+        "https://mcp.supabase.com/.well-known/oauth-protected-resource/mcp"
+      ],
+      "reviewedAt": "2026-10-22",
+      "liveProof": "not-run",
+      "keyPermissions": "Use a scoped personal access token (sbp_...) with permissions for the enabled MCP tools and selected projects. Project publishable, anon, service_role and secret API keys are not supported. Project creation needs account access; Paperclip cannot increase an issued token\u2019s permissions."
     },
     {
       "app": "superagent",
@@ -2393,7 +2438,7 @@
         "offline_access"
       ],
       "capability": "read",
-      "supportedActions": "Run public web search and extract content from public pages using the account’s Tavily API key and credit allowance. These are read/search operations; no provider business-record write action is exposed.",
+      "supportedActions": "Run public web search and extract content from public pages using the account\u2019s Tavily API key and credit allowance. These are read/search operations; no provider business-record write action is exposed.",
       "evidence": [
         "https://docs.tavily.com/documentation/mcp",
         "https://mcp.tavily.com/.well-known/oauth-protected-resource/mcp",
@@ -2471,7 +2516,7 @@
       ],
       "reviewedAt": "2026-10-08",
       "liveProof": "not-run",
-      "keyPermissions": "Create an API key for the intended Firecrawl team with access to the search, scrape, parse, and any job tools you intend to use. Jobs can consume credits; Paperclip cannot increase an existing key’s permissions."
+      "keyPermissions": "Create an API key for the intended Firecrawl team with access to the search, scrape, parse, and any job tools you intend to use. Jobs can consume credits; Paperclip cannot increase an existing key\u2019s permissions."
     },
     {
       "app": "firecrawl",
@@ -2574,7 +2619,7 @@
       ],
       "reviewedAt": "2026-10-08",
       "liveProof": "not-run",
-      "keyPermissions": "At key creation, choose read-only or read/write according to the approved task. Read/write keys can reach URL-submission and related provider actions; Paperclip cannot increase an existing key’s permissions."
+      "keyPermissions": "At key creation, choose read-only or read/write according to the approved task. Read/write keys can reach URL-submission and related provider actions; Paperclip cannot increase an existing key\u2019s permissions."
     },
     {
       "app": "airtable",
@@ -2779,7 +2824,7 @@
       "reviewedAt": "2026-10-21",
       "liveProof": "not-run",
       "evidenceLimit": "Public provider documentation and OAuth metadata only. Account-bound connect, discovery, read/write execution, run-scoped gateway, refresh/reconnect, removal, and secret handling remain to be qualified for this method.",
-      "keyPermissions": "Create a Braintrust API key in Settings → API keys for the account and organization whose data agents should access. The key must authorize the reads and writes you intend to allow; Paperclip cannot increase or narrow its provider permissions. Evaluations and Topics processing can incur costs. Dataset edits can permanently delete rows; automation activation can enable retention or delivery."
+      "keyPermissions": "Create a Braintrust API key in Settings \u2192 API keys for the account and organization whose data agents should access. The key must authorize the reads and writes you intend to allow; Paperclip cannot increase or narrow its provider permissions. Evaluations and Topics processing can incur costs. Dataset edits can permanently delete rows; automation activation can enable retention or delivery."
     },
     {
       "app": "braintrust",
@@ -2816,7 +2861,7 @@
       "reviewedAt": "2026-10-21",
       "liveProof": "not-run",
       "evidenceLimit": "Public provider documentation and OAuth metadata only. Account-bound connect, discovery, read/write execution, run-scoped gateway, refresh/reconnect, removal, and secret handling remain to be qualified for this method.",
-      "keyPermissions": "Create a Braintrust API key in Settings → API keys for the account and organization whose data agents should access. The key must authorize the reads and writes you intend to allow; Paperclip cannot increase or narrow its provider permissions. Evaluations and Topics processing can incur costs. Dataset edits can permanently delete rows; automation activation can enable retention or delivery."
+      "keyPermissions": "Create a Braintrust API key in Settings \u2192 API keys for the account and organization whose data agents should access. The key must authorize the reads and writes you intend to allow; Paperclip cannot increase or narrow its provider permissions. Evaluations and Topics processing can incur costs. Dataset edits can permanently delete rows; automation activation can enable retention or delivery."
     },
     {
       "app": "unikraft",
@@ -2835,51 +2880,6 @@
       "reviewedAt": "2026-10-15",
       "liveProof": "not-run",
       "keyPermissions": "Create an API token in the Unikraft Cloud console. A token acts for its whole organization in every metro, including running sandbox commands and deleting resources. Unikraft does not offer narrower token permissions, so choose trusted agents and use action permissions to limit what they can do."
-    },
-    {
-      "app": "supabase",
-      "method": "mcp-oauth",
-      "auth": "oauth",
-      "policy": "explicit",
-      "requestedScopes": [
-        "organizations:read",
-        "projects:read",
-        "projects:write",
-        "database:write",
-        "database:read",
-        "analytics:read",
-        "secrets:read",
-        "edge_functions:read",
-        "edge_functions:write",
-        "environment:read",
-        "environment:write",
-        "storage:read",
-        "storage:write"
-      ],
-      "capability": "write",
-      "supportedActions": "Unpinned connections can list/create/pause/restore projects and use account cost tools. Hosted MCP supports SQL/migrations, Edge Function deployment, branches and opt-in storage configuration. A project_ref disables account tools. Read-only mode and token permissions remain authoritative. Auth and Data API configuration use the separate Management API method.",
-      "evidence": [
-        "https://supabase.com/docs/guides/ai-tools/mcp",
-        "https://mcp.supabase.com/.well-known/oauth-protected-resource/mcp"
-      ],
-      "reviewedAt": "2026-10-22",
-      "liveProof": "2026-10-22: Real browser OAuth in an isolated Paperclip instance discovered 29 MCP tools. An actual process-agent gateway run listed organizations, obtained a zero-monthly-cost quote and confirmation, and created one disposable project that reached ACTIVE_HEALTHY. A read-only reconciliation found exactly one proof project. Dashboard cleanup deleted that project. Earlier harness parsing/duplicate-wake failures are documented in SUPABASE.md. MCP token authentication and all SQL/branch/storage capabilities were not live-tested."
-    },
-    {
-      "app": "supabase",
-      "method": "mcp-api-key",
-      "auth": "api_key",
-      "policy": "provider-key",
-      "requestedScopes": [],
-      "capability": "provider-controlled",
-      "supportedActions": "Unpinned connections can list/create/pause/restore projects and use account cost tools. Hosted MCP supports SQL/migrations, Edge Function deployment, branches and opt-in storage configuration. A project_ref disables account tools. Read-only mode and token permissions remain authoritative. Auth and Data API configuration use the separate Management API method.",
-      "evidence": [
-        "https://supabase.com/docs/guides/ai-tools/mcp",
-        "https://mcp.supabase.com/.well-known/oauth-protected-resource/mcp"
-      ],
-      "reviewedAt": "2026-10-22",
-      "liveProof": "not-run",
-      "keyPermissions": "Use a scoped personal access token (sbp_...) with permissions for the enabled MCP tools and selected projects. Project publishable, anon, service_role and secret API keys are not supported. Project creation needs account access; Paperclip cannot increase an issued token’s permissions."
     },
     {
       "app": "supabase",
@@ -2903,7 +2903,7 @@
       ],
       "reviewedAt": "2026-10-22",
       "liveProof": "2026-10-22: Approved 24-hour project-scoped PAT connected through the real Apps UI and discovered 11 native actions. Actual process-agent gateway calls changed and read back Auth and Data API settings, wrote a synthetic function secret with redacted responses, deployed an ACTIVE Edge Function, and received HTTP200 with the expected marker and secretConfigured:true. A failed cleanup response was preserved; read-only reconciliation confirmed restored original settings, then a successful cleanup run deleted the function and confirmed absence. Dashboard project deletion removed its secret; the temporary PAT and local connections were removed. Forced refresh/reconnect were not live-tested.",
-      "keyPermissions": "Create a scoped Supabase personal access token for the selected project. Set Project Settings, Auth Config, Data API Config, Edge Functions, and Edge Function Secrets to Read-write. Leave API Key Secrets, Auth Signing Keys, and Data API JWT Secret at None. Use a short expiration. Project API keys are not supported; Paperclip cannot increase an issued token’s permissions."
+      "keyPermissions": "Create a scoped Supabase personal access token for the selected project. Set Project Settings, Auth Config, Data API Config, Edge Functions, and Edge Function Secrets to Read-write. Leave API Key Secrets, Auth Signing Keys, and Data API JWT Secret at None. Use a short expiration. Project API keys are not supported; Paperclip cannot increase an issued token\u2019s permissions."
     },
     {
       "app": "vercel",
