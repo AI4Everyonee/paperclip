@@ -30,17 +30,17 @@ export function vercelClient(headers: Record<string, string>, request: VercelReq
   if (!parsedTeam.success) throw failure(422, "vercel_team_required", "Configure the Vercel team ID for this connection.");
   const teamId = parsedTeam.data;
   const token = authorization.slice(7);
-  const expired = () => failure(504, "vercel_deadline_exceeded", "The Vercel request timed out. A submitted operation may still complete; inspect its state before retrying.");
+  const deadlineError = failure(504, "vercel_deadline_exceeded", "The Vercel request timed out. A submitted operation may still complete; inspect its state before retrying.");
 
   async function withinDeadline<T>(work: () => Promise<T>): Promise<T> {
-    if (signal.aborted || Date.now() >= deadlineAt) throw expired();
+    if (signal.aborted || Date.now() >= deadlineAt) throw deadlineError;
     let abort!: () => void;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       return await Promise.race([
-        Promise.resolve().then(() => { if (signal.aborted || Date.now() >= deadlineAt) throw expired(); return work(); }),
+        Promise.resolve().then(() => { if (signal.aborted || Date.now() >= deadlineAt) throw deadlineError; return work(); }),
         new Promise<never>((_resolve, reject) => {
-          abort = () => reject(expired());
+          abort = () => reject(deadlineError);
           signal.addEventListener("abort", abort, { once: true });
           timer = setTimeout(abort, Math.max(0, deadlineAt - Date.now()));
         }),
@@ -63,8 +63,8 @@ export function vercelClient(headers: Record<string, string>, request: VercelReq
     try {
       response = await withinDeadline(() => request(url.href, { method, headers: { Authorization: authorization!, "Content-Type": "application/json", "User-Agent": "Paperclip" },
         redirect: "error", signal, ...(serialized === undefined ? {} : { body: serialized }) }));
-    } catch {
-      if (signal.aborted || Date.now() >= deadlineAt) throw expired();
+    } catch (error) {
+      if (error === deadlineError || signal.aborted || Date.now() >= deadlineAt) throw deadlineError;
       throw failure(502, "vercel_outcome_unknown", "Vercel did not return a result. A submitted operation may still complete; inspect its state before retrying.");
     }
     if (!response.ok) {
@@ -81,16 +81,17 @@ export function vercelClient(headers: Record<string, string>, request: VercelReq
     const reader = response.body.getReader();
     const chunks: Uint8Array[] = [];
     let length = 0;
+    const outputLimitError = failure(502, "vercel_output_limit", "Vercel's response exceeded 4 MiB. Request a smaller page.");
     try {
       for (;;) {
         const part = await withinDeadline(() => reader.read());
         if (part.done) break;
         length += part.value.byteLength;
-        if (length > MAX_BYTES) throw failure(502, "vercel_output_limit", "Vercel's response exceeded 4 MiB. Request a smaller page.");
+        if (length > MAX_BYTES) throw outputLimitError;
         chunks.push(part.value);
       }
     } catch (error) {
-      if (error instanceof HttpError) throw error;
+      if (error === deadlineError || error === outputLimitError) throw error;
       throw failure(502, "vercel_outcome_unknown", "Vercel's response was interrupted. Inspect the operation before retrying.");
     } finally { void reader.cancel().catch(() => {}); }
     if (!length) return null;

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { HttpError } from "../../../errors.js";
 import { redactEventPayload } from "../../../redaction.js";
 import { descriptorHash, stableHash } from "../../tool-catalog-hash.js";
 import { isCurrentVercelCatalogEntry, isVercelConnection, VERCEL_API_URL, VERCEL_METHOD, VERCEL_TOOLS, vercelClient, vercelRisk, type VercelRequest } from "./index.js";
@@ -155,6 +156,10 @@ describe("Vercel deployment connector", () => {
     expect(request).toHaveBeenCalledTimes(1);
     const rejected = fixture(() => json({ error: { message: token } }, 403));
     await expect(rejected.client.invoke("vercel_create_project", { name: "fixture" })).rejects.toMatchObject({ status: 403, message: "Vercel denied access. Check the access token's team scope, expiration and role, then reconnect." });
+    const forged = fixture(() => { throw new HttpError(504, `network error ${token}`, { code: "vercel_deadline_exceeded" }); });
+    await expect(forged.client.invoke("vercel_create_project", { name: "fixture" })).rejects.toMatchObject({ status: 502,
+      message: "Vercel did not return a result. A submitted operation may still complete; inspect its state before retrying." });
+    expect(forged.request).toHaveBeenCalledTimes(1);
   });
 
   it("redacts exact connection tokens even if returned in allowed fields or object keys", async () => {
@@ -162,8 +167,10 @@ describe("Vercel deployment connector", () => {
     expect(JSON.stringify(await client.invoke("vercel_list_domains", { projectId: project.id }))).not.toContain(token);
   });
 
-  it("expires slow prerequisites without a late write and keeps other requests responsive", async () => {
-    vi.useFakeTimers();
+  it("expires slow prerequisites before the wall-clock threshold without a late write and keeps other requests responsive", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const now = Date.now();
+    const wallClock = vi.spyOn(Date, "now").mockReturnValue(now);
     try {
       let finish!: (response: Response) => void;
       let markStarted!: () => void;
@@ -172,20 +179,33 @@ describe("Vercel deployment connector", () => {
         finish = resolve;
         markStarted();
       }));
-      const pending = vercelClient(headers, request, teamId, new AbortController().signal, Date.now() + 30)
+      const deadlineAt = now + 30;
+      const pending = vercelClient(headers, request, teamId, new AbortController().signal, deadlineAt)
         .invoke("vercel_delete_project", { projectId: project.id });
-      const assertion = expect(pending).rejects.toMatchObject({ status: 504 });
+      const outcome = pending.then(() => null, error => error);
       await started;
       expect(await fixture(() => json({ id: teamId })).client.probe()).toEqual({ teamId });
       await vi.advanceTimersByTimeAsync(30);
-      await assertion;
+      expect(Date.now()).toBeLessThan(deadlineAt);
+      expect(await outcome).toMatchObject({ status: 504, details: { code: "vercel_deadline_exceeded" } });
       finish(json(project));
       await vi.advanceTimersByTimeAsync(0);
       expect(request).toHaveBeenCalledTimes(1);
       expect(request.mock.calls[0]![1].method).toBe("GET");
     } finally {
+      wallClock.mockRestore();
       vi.useRealTimers();
     }
+  });
+
+  it("does not expose arbitrary transport HTTP errors from response streams", async () => {
+    const { client } = fixture(() => new Response(new ReadableStream({
+      start(controller) {
+        controller.error(new HttpError(504, `stream error ${token}`, { code: "vercel_deadline_exceeded" }));
+      },
+    })));
+    await expect(client.probe()).rejects.toMatchObject({ status: 502,
+      message: "Vercel's response was interrupted. Inspect the operation before retrying." });
   });
 
   it("bounds a response stream even if its reader stalls", async () => {

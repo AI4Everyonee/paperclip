@@ -88,7 +88,9 @@ export function supabaseClient(headers: Record<string, string>, request: Supabas
   if (!authorization || !/^Bearer \S+$/.test(authorization)) throw fail(422, "supabase_credential_missing", "Reconnect Supabase with a personal access token.");
   const secret = authorization.slice(7);
   const base = `${SUPABASE_API_URL}/projects/${projectRef}`;
-  const expired = () => fail(504, "supabase_deadline_exceeded", "The Supabase action deadline expired. Inspect the provider state before retrying a write.");
+  const deadlineError = fail(504, "supabase_deadline_exceeded", "The Supabase action deadline expired. Inspect the provider state before retrying a write.");
+  const outputLimitError = fail(502, "supabase_output_limit", "Supabase returned an oversized response.");
+  const expired = () => deadlineError;
   async function bounded<T>(work: () => Promise<T>): Promise<T> {
     const remaining = deadlineAt - Date.now();
     if (signal.aborted || remaining <= 0) throw expired();
@@ -125,8 +127,10 @@ export function supabaseClient(headers: Record<string, string>, request: Supabas
         method, body, redirect: "error", signal,
         headers: { Authorization: authorization!, Accept: "application/json", ...(contentType ? { "Content-Type": contentType } : {}) },
       }));
-    } catch {
-      if (signal.aborted || Date.now() >= deadlineAt) throw expired();
+    } catch (error) {
+      // The local timer is authoritative even if wall-clock time moved back or
+      // the timer fired just before Date.now() reaches the absolute deadline.
+      if (error === deadlineError || signal.aborted || Date.now() >= deadlineAt) throw expired();
       throw fail(502, "supabase_outcome_unknown", method === "GET" ? "Supabase could not complete this request." : "Supabase did not return a result. The operation may have completed; inspect its state before retrying.");
     }
     if (!response.ok) {
@@ -152,11 +156,11 @@ export function supabaseClient(headers: Record<string, string>, request: Supabas
         const part = await bounded(() => reader.read());
         if (part.done) break;
         size += part.value.byteLength;
-        if (size > MAX_BYTES) throw fail(502, "supabase_output_limit", "Supabase returned an oversized response.");
+        if (size > MAX_BYTES) throw outputLimitError;
         chunks.push(part.value);
       }
     } catch (error) {
-      if (error instanceof HttpError) throw error;
+      if (error === deadlineError || error === outputLimitError) throw error;
       throw fail(502, "supabase_outcome_unknown", "Supabase's response was interrupted. Inspect the operation before retrying.");
     } finally { void reader.cancel().catch(() => {}); }
     if (!size) return null;

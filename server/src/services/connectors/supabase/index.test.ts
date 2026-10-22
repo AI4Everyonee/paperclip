@@ -191,6 +191,20 @@ describe("Supabase deployment and configuration", () => {
     expect(request).toHaveBeenCalledTimes(1);
   });
 
+  it.each(["transport", "body"])("does not expose an untrusted HttpError from the %s", async stage => {
+    const untrusted = new HttpError(504, `provider error ${token}`, { code: "supabase_deadline_exceeded", token });
+    const request = vi.fn(async () => {
+      if (stage === "transport") throw untrusted;
+      return new Response(new ReadableStream({ pull(controller) { controller.error(untrusted); } }));
+    });
+    const result = await failure(supabaseClient(headers, request, projectRef).probe());
+    expect(result).toMatchObject({ status: 502, details: { code: "supabase_outcome_unknown" } });
+    expect(result).not.toBe(untrusted);
+    expect(result.message).not.toContain(token);
+    expect(JSON.stringify(result.details)).not.toContain(token);
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
   it("treats a provider server error after an applied configuration write as uncertain", async () => {
     let maxRows = 901;
     const request = vi.fn(async (_url: string, init: RequestInit) => {
@@ -227,6 +241,27 @@ describe("Supabase deployment and configuration", () => {
     controller.abort();
     await expect(client.invoke("supabase_delete_edge_function", { slug: "hello" })).rejects.toMatchObject({ status: 504 });
     expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves a fired local deadline when wall-clock time is still before its threshold", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    try {
+      const controller = new AbortController();
+      const request = vi.fn(() => new Promise<Response>(() => {}));
+      const client = supabaseClient(headers, request, projectRef, controller.signal, 1_020);
+      const pending = expect(client.probe()).rejects.toMatchObject({
+        status: 504, details: { code: "supabase_deadline_exceeded" },
+      });
+      await vi.advanceTimersByTimeAsync(20);
+      await pending;
+      expect(Date.now()).toBeLessThan(1_020);
+      expect(controller.signal.aborted).toBe(false);
+      expect(request).toHaveBeenCalledTimes(1);
+    } finally {
+      now.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it("rejects oversized output and invalid JSON without exposing response bytes", async () => {
