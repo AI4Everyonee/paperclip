@@ -212,7 +212,7 @@
           "required": true,
           "placeholder": "sbp_...",
           "secret": true,
-          "helperMd": "Use a scoped personal access token (sbp_...) for this project with project_admin_read, edge_functions_read/write, edge_functions_secrets_read/write, auth_config_read/write, project_admin_write for Auth changes, and data_api_config_read/write. Equivalent Management API OAuth scopes are projects:read, edge_functions:read/write, secrets:read/write, auth:read/write, rest:read/write. This method uses a PAT, not MCP OAuth tokens or project API keys. Paperclip cannot increase an issued token’s permissions."
+          "helperMd": "Create a scoped Supabase personal access token for the selected project. Set Project Settings, Auth Config, Data API Config, Edge Functions, and Edge Function Secrets to Read-write. Leave API Key Secrets, Auth Signing Keys, and Data API JWT Secret at None. Use a short expiration. Project API keys are not supported; Paperclip cannot increase an issued token’s permissions."
         }
       ],
       "keyPlacement": {

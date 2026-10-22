@@ -148,16 +148,26 @@ drift, and cancellation of a stalled prerequisite without a late mutation.
 The database-backed lifecycle suite is
 `server/src/__tests__/deployment-connections.test.ts`.
 
-Account-bound live proof remains **not run**: this implementation session did not
-have an authorized Vercel token and disposable project. Public metadata and mock
-provider tests do not prove a real account deployment or entitlement. Complete the
-playbook lifecycle with a disposable project before describing it as provider
-qualified: connect, read, governed preview deploy, observe `READY`, set a synthetic
-environment variable, redeploy, refresh/reconnect, revoke/remove, confirm denial,
-and delete disposable resources. Retain only safe receipts, schema hashes, policy
-outcomes and cleanup status; never retain tokens or provider error bodies.
+Account-bound live proof passed on 2026-10-22 with an approved, one-hour token
+and disposable projects in an isolated local Paperclip instance. Actual process
+agent runs used the run-scoped gateway to list projects, create a project, write
+a synthetic preview environment secret, read back metadata without its value,
+and create a preview deployment that reached `READY`. The signed-in browser
+loaded the deployed page and showed the exact synthetic marker. Anonymous access
+returned 302 under the team's existing deployment protection, which was retained.
+Gateway cleanup deleted both disposable projects and confirmed their absence.
+The temporary provider token and local connection were removed. A fresh process
+agent received no Vercel tools, and calling the prior tool name returned 404.
+
+This proves the token method's preview deployment and environment configuration
+path for this account. Production publishing, GitHub-source deployment, custom
+domains, forced credential refresh, and all provider plan combinations were not
+live-tested. Their fixture coverage does not establish account entitlement.
+Keep receipts free of credentials, environment values, and raw provider errors.
 
 Sensitive tool arguments such as `secretValue` are encrypted in newly created
 approval payloads with the instance tool-action signing secret. Approval summaries
 and audit still use redacted values. Existing signed approval records remain
-readable and are not rewritten; back up the instance signing key with the database.
+readable and are not rewritten. Sensitive request identities also use this key
+to distinguish secret replacements without storing guessable secret hashes.
+Key rotation can invalidate retry matching; back up the signing key with the database.

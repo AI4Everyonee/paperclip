@@ -2863,7 +2863,7 @@
         "https://mcp.supabase.com/.well-known/oauth-protected-resource/mcp"
       ],
       "reviewedAt": "2026-10-22",
-      "liveProof": "not-run"
+      "liveProof": "2026-10-22: Real browser OAuth in an isolated Paperclip instance discovered 29 MCP tools. An actual process-agent gateway run listed organizations, obtained a zero-monthly-cost quote and confirmation, and created one disposable project that reached ACTIVE_HEALTHY. A read-only reconciliation found exactly one proof project. Dashboard cleanup deleted that project. Earlier harness parsing/duplicate-wake failures are documented in SUPABASE.md. MCP token authentication and all SQL/branch/storage capabilities were not live-tested."
     },
     {
       "app": "supabase",
@@ -2898,11 +2898,12 @@
         "https://supabase.com/docs/reference/api/v1-get-postgrest-service-config",
         "https://supabase.com/docs/reference/api/v1-update-postgrest-service-config",
         "https://supabase.com/docs/reference/api/v1-bulk-create-secrets",
-        "https://supabase.com/docs/reference/api/v1-list-all-secrets"
+        "https://supabase.com/docs/reference/api/v1-list-all-secrets",
+        "https://supabase.com/docs/guides/platform/personal-access-tokens"
       ],
       "reviewedAt": "2026-10-22",
-      "liveProof": "not-run",
-      "keyPermissions": "Use a scoped personal access token (sbp_...) for this project with project_admin_read, edge_functions_read/write, edge_functions_secrets_read/write, auth_config_read/write, project_admin_write for Auth changes, and data_api_config_read/write. Equivalent Management API OAuth scopes are projects:read, edge_functions:read/write, secrets:read/write, auth:read/write, rest:read/write. This method uses a PAT, not MCP OAuth tokens or project API keys. Paperclip cannot increase an issued token’s permissions."
+      "liveProof": "2026-10-22: Approved 24-hour project-scoped PAT connected through the real Apps UI and discovered 11 native actions. Actual process-agent gateway calls changed and read back Auth and Data API settings, wrote a synthetic function secret with redacted responses, deployed an ACTIVE Edge Function, and received HTTP200 with the expected marker and secretConfigured:true. A failed cleanup response was preserved; read-only reconciliation confirmed restored original settings, then a successful cleanup run deleted the function and confirmed absence. Dashboard project deletion removed its secret; the temporary PAT and local connections were removed. Forced refresh/reconnect were not live-tested.",
+      "keyPermissions": "Create a scoped Supabase personal access token for the selected project. Set Project Settings, Auth Config, Data API Config, Edge Functions, and Edge Function Secrets to Read-write. Leave API Key Secrets, Auth Signing Keys, and Data API JWT Secret at None. Use a short expiration. Project API keys are not supported; Paperclip cannot increase an issued token’s permissions."
     },
     {
       "app": "vercel",
@@ -2920,7 +2921,7 @@
         "https://openapi.vercel.sh"
       ],
       "reviewedAt": "2026-10-22",
-      "liveProof": "not-run",
+      "liveProof": "2026-10-22: Approved one-hour team token connected in an isolated Paperclip instance with 17 actions. Actual process-agent gateway runs listed and created disposable projects, wrote a synthetic preview environment secret, read metadata without its value, and deployed a preview that reached READY. The signed-in browser displayed the exact deployed marker; anonymous access retained the existing protection redirect. Gateway cleanup deleted both disposable projects and confirmed absence. The temporary provider token and local connection were removed; a fresh agent saw no tools and an old-name call returned404. Production, GitHub-source deployments, domains, forced refresh, and all account plans were not live-tested.",
       "evidenceLimit": "Official documentation/OpenAPI plus local fixtures. No authenticated account-bound deployment/configuration/revocation proof; no disposable project credential supplied."
     }
   ]

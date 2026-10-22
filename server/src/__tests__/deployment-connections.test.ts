@@ -8,6 +8,7 @@ import {
 } from "@paperclipai/db";
 import { toolAccessService } from "../services/tool-access.js";
 import { createToolGatewayService } from "../services/tool-gateway.js";
+import { summarizeToolValue } from "../services/tool-content-guards.js";
 import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } from "./helpers/embedded-postgres.js";
 
 // These provider fixtures exercise Paperclip's real setup, vault, policy, and
@@ -87,7 +88,7 @@ const support = external ? { supported: true } : await getEmbeddedPostgresTestSu
     return company;
   }
 
-  async function fixture(provider: Provider, personal = false) {
+  async function fixture(provider: Provider, personal = false, secretValues = [environmentSecret]) {
     const company = await createCompany();
     let credential = `synthetic-${provider.slug}-credential`;
     const request = vi.fn(async (url: string, init: RequestInit) => {
@@ -112,8 +113,10 @@ const support = external ? { supported: true } : await getEmbeddedPostgresTestSu
           return Response.json({ id: randomUUID(), slug: "hello", name: "hello", status: "ACTIVE", version: 1 });
         }
         if (parsed.pathname === `${prefix}/secrets` && method === "POST") {
-          expect(JSON.parse(String(init.body))).toEqual([{ name: "SERVICE_TOKEN", value: environmentSecret }]);
-          return Response.json([{ name: "SERVICE_TOKEN", value: environmentSecret }]);
+          const body = JSON.parse(String(init.body));
+          expect(body).toEqual([{ name: "SERVICE_TOKEN", value: expect.any(String) }]);
+          expect(secretValues).toContain(body[0].value);
+          return Response.json(body);
         }
       } else {
         expect(parsed.origin).toBe("https://api.vercel.com");
@@ -127,8 +130,10 @@ const support = external ? { supported: true } : await getEmbeddedPostgresTestSu
         }
         if (parsed.pathname === `/v10/projects/${projectId}/env` && method === "POST") {
           expect(parsed.searchParams.get("upsert")).toBe("true");
-          expect(JSON.parse(String(init.body))).toMatchObject({ key: "SERVICE_TOKEN", value: environmentSecret, target: ["preview"], type: "encrypted" });
-          return Response.json({ created: { id: "env_fixture", key: "SERVICE_TOKEN", value: environmentSecret, target: ["preview"], type: "encrypted" }, failed: [] });
+          const body = JSON.parse(String(init.body));
+          expect(body).toMatchObject({ key: "SERVICE_TOKEN", value: expect.any(String), target: ["preview"], type: "encrypted" });
+          expect(secretValues).toContain(body.value);
+          return Response.json({ created: { id: "env_fixture", ...body }, failed: [] });
         }
       }
       throw new Error(`Unexpected ${provider.slug} fixture request: ${method} ${parsed.pathname}`);
@@ -301,6 +306,64 @@ const support = external ? { supported: true } : await getEmbeddedPostgresTestSu
       const requests = await db.select().from(toolActionRequests).where(eq(toolActionRequests.companyId, f.company.id));
       expect(JSON.stringify({ approved, invocations, audits, requests })).not.toContain(environmentSecret);
       expect(JSON.stringify({ approved, invocations, audits, requests })).not.toContain(f.credential());
+    });
+
+    it.each(["allowed", "ask_first", "ask_first_legacy"] as const)("distinguishes changed secrets and replays identical writes without exposing values (%s)", async mode => {
+      const askFirst = mode !== "allowed";
+      const secrets = ["synthetic-secret-first-value", "synthetic-secret-second-value"];
+      const f = await fixture(provider, false, secrets);
+      const configure = provider.slug === "supabase" ? provider.configureSecret : provider.configure;
+      const tool = f.tools.find(candidate => candidate.upstreamToolName === configure.name)!;
+      const write = (secretValue: string) => f.gateway.executeTool({
+        sessionToken: f.session.token, tool: tool.name,
+        parameters: { ...configure.parameters, secretValue },
+      });
+      if (askFirst) {
+        const entry = f.connected.catalog.find(candidate => candidate.toolName === configure.name)!;
+        await f.service.finishGalleryAppConnection(f.company.id, f.connected.connectionId, {
+          enabledCatalogEntryIds: f.connected.catalog.map(candidate => candidate.id),
+          askFirstCatalogEntryIds: [entry.id], access: { agentIds: [f.agent.id] },
+        }, actor);
+      }
+      const execute = async (secretValue: string) => {
+        if (askFirst) {
+          await expect(write(secretValue)).rejects.toMatchObject({ reasonCode: "approval_required" });
+          const requests = await db.select().from(toolActionRequests).where(eq(toolActionRequests.companyId, f.company.id));
+          const pending = requests.filter(request => request.status === "pending");
+          expect(pending).toHaveLength(1);
+          await f.gateway.approveActionRequest({ companyId: f.company.id, actionRequestId: pending[0].id, actor: { userId: actor.actorId } });
+          if (mode === "ask_first_legacy" && secretValue === secrets[0]) {
+            // Historical rows used the redacted summary hash. Their signed
+            // payload must still distinguish a later change to the secret.
+            await db.update(toolActionRequests).set({
+              canonicalArgumentsHash: summarizeToolValue({ ...configure.parameters, secretValue }).sha256,
+            }).where(eq(toolActionRequests.id, pending[0].id));
+          }
+        }
+        return write(secretValue);
+      };
+      f.request.mockClear();
+      const first = await execute(secrets[0]);
+      const second = await execute(secrets[1]);
+      const replay = await write(secrets[1]);
+      expect(first.status).toBe(askFirst ? "replayed" : "completed");
+      expect(second.status).toBe(askFirst ? "replayed" : "completed");
+      expect(second.invocationId).not.toBe(first.invocationId);
+      expect(replay).toMatchObject({ status: "replayed", invocationId: second.invocationId });
+      const writes = f.request.mock.calls.filter(([, init]) => init.method === "POST");
+      expect(writes).toHaveLength(2);
+      expect(writes.map(([, init]) => {
+        const body = JSON.parse(String(init.body));
+        return provider.slug === "supabase" ? body[0].value : body.value;
+      })).toEqual(secrets);
+      const invocations = await db.select().from(toolInvocations).where(eq(toolInvocations.companyId, f.company.id));
+      expect(invocations).toHaveLength(2);
+      expect(new Set(invocations.map(invocation => invocation.argumentsHash)).size).toBe(2);
+      const audits = await db.select().from(toolAccessAuditEvents).where(eq(toolAccessAuditEvents.companyId, f.company.id));
+      const requests = await db.select().from(toolActionRequests).where(eq(toolActionRequests.companyId, f.company.id));
+      expect(requests).toHaveLength(askFirst ? 2 : 0);
+      const visible = JSON.stringify({ first, second, replay, invocations, audits, requests });
+      for (const secret of secrets) expect(visible).not.toContain(secret);
     });
 
     it("keeps another company and another responsible user outside a personal connection", async () => {

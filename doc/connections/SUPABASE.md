@@ -210,10 +210,14 @@ provider suite passes all 30 tests. A subsequent actual process-agent cleanup ru
 settings, deleted the function, and verified its absence from the function list.
 The original failed run and successful reconciliation are retained separately.
 
-Disposable project deletion, temporary token revocation, reconnect, and local
-connection removal remain pending final cleanup. The project deletion also
-removes the disposable environment secret. No paid upgrade or production
-resource was created or modified.
+The operator deleted the disposable project in the Dashboard, removing its
+database and proof secret, and confirmed its absence from the organization list.
+The temporary scoped PAT was deleted; the provider showed no remaining PATs.
+Both local connections and the unconnected setup draft were removed. Fresh
+process agents received no tools and prior tool names returned 404 for both
+connections. A final MCP list confirmed the proof project was absent. Forced refresh and reconnect with
+fresh provider credentials were not live-tested. No paid upgrade or existing
+production resource was created or modified.
 
 Sensitive tool arguments such as `secretValue` are encrypted in newly created
 approval payloads with the instance tool-action signing secret. Approval summaries

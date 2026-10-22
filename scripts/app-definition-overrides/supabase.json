@@ -212,7 +212,7 @@
           "required": true,
           "placeholder": "sbp_...",
           "secret": true,
-          "helperMd": "Grant project read, Edge Function and Edge Function secret read/write, Auth configuration read/write, and Data API configuration read/write for this project. Project API keys (publishable, anon, service_role, and secret keys) are not supported. Paperclip cannot increase token permissions."
+          "helperMd": "Scope the token to this project. Grant Read-write for Project Settings, Auth Config, Data API Config, Edge Functions, and Edge Function Secrets. Auth updates require both Project Settings and Auth Config. Project API keys (publishable, anon, service_role, and secret keys) are not supported. Paperclip cannot increase token permissions."
         }
       ],
       "keyPlacement": {
