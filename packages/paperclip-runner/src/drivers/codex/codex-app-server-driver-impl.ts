@@ -3,7 +3,6 @@ import { writeManagedCodexObservability, redactObservabilityDiagnostic } from ".
 import { trustCodexStartupRoot } from "./codex-startup-trust.js";
 import { readCodexThreadState, readCodexTurnMetadata } from "./codex-history.js";
 import { codexExecutableReadOnlyRoots } from "./codex-security-config.js";
-import { resolve } from "node:path";
 
 import type {
   HarnessDriver,
@@ -37,8 +36,8 @@ import {
 } from "./app-server-transport.js";
 import {
   boundedCodexValue,
+  codexThreadWorkingDirectory,
   validateCodexWorkingDirectory as validateWorkingDirectory,
-  validatePreparedLaunchWorkingDirectory,
 } from "./codex-boundaries.js";
 import {
   codexCommandEnvironment,
@@ -852,9 +851,10 @@ export class CodexAppServerDriver implements HarnessDriver {
         `provider_initialize_protocol_error: provider=${this.#options.driverIdentity?.kind ?? "codex"} stage=session.open omitted provider session identity`,
       );
     }
-    const workingDirectory = this.#openedWorkingDirectory(
-      response,
+    const workingDirectory = codexThreadWorkingDirectory(
+      response.cwd,
       expectedWorkingDirectory,
+      this.#options.workingDirectoryAuthority,
     );
     const activePermissionProfile = record(thread.activePermissionProfile);
     const permissionProfileId = text(activePermissionProfile.id);
@@ -942,38 +942,6 @@ export class CodexAppServerDriver implements HarnessDriver {
       },
       lineage: lineageFromThread(thread),
     };
-  }
-
-  #openedWorkingDirectory(
-    response: Record<string, unknown>,
-    expected: string | null,
-  ): string {
-    if (!this.#preparedLaunch()) {
-      if (expected === null) {
-        throw new Error("Codex working directory is required");
-      }
-      const returned = text(response.cwd, expected);
-      if (resolve(returned) !== expected) {
-        throw new Error(
-          "Codex thread response changed the assigned working directory",
-        );
-      }
-      return expected;
-    }
-    // The transport reports the directory from the prepared launch. Recovery
-    // supplies the directory it already recorded, which must not change.
-    if (response.cwd === undefined) {
-      throw new Error(
-        "Prepared launch did not report its provider working directory",
-      );
-    }
-    const returned = validatePreparedLaunchWorkingDirectory(response.cwd);
-    if (expected !== null && returned !== expected) {
-      throw new Error(
-        "Codex thread response changed the assigned working directory",
-      );
-    }
-    return returned;
   }
 
   #session(input: {

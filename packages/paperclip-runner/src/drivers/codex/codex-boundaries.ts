@@ -159,6 +159,34 @@ export function validatePreparedLaunchWorkingDirectory(
   return workingDirectory;
 }
 
+/**
+ * Resolve the directory a thread response reports. Core-assigned directories
+ * must come back unchanged. A prepared launch must report its directory, and
+ * recovery must report the directory that the session already recorded.
+ */
+export function codexThreadWorkingDirectory(
+  reported: unknown,
+  expected: string | null,
+  authority: CodexWorkingDirectoryAuthority = "local_filesystem",
+): string {
+  if (authority !== "runner_prepared_launch") {
+    if (expected === null) throw new Error("Codex working directory is required");
+    const returned = typeof reported === "string" ? reported : expected;
+    if (resolve(returned) !== expected) {
+      throw new Error("Codex thread response changed the assigned working directory");
+    }
+    return expected;
+  }
+  if (reported === undefined) {
+    throw new Error("Prepared launch did not report its provider working directory");
+  }
+  const returned = validatePreparedLaunchWorkingDirectory(reported);
+  if (expected !== null && returned !== expected) {
+    throw new Error("Codex thread response changed the assigned working directory");
+  }
+  return returned;
+}
+
 function validateRemoteRunnerWorkingDirectory(
   workingDirectory: string,
   environment: NodeJS.ProcessEnv,
