@@ -1,0 +1,393 @@
+import { randomUUID } from "node:crypto";
+import { eq } from "drizzle-orm";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  activityLog, agents, applyPendingMigrations, companies, companyMemberships, companySecrets,
+  connectionGrants, createDb, ensurePostgresDatabase, heartbeatRuns, issues,
+  toolAccessAuditEvents, toolActionRequests, toolApplications, toolCatalogEntries, toolConnections, toolInvocations, userSecretDeclarations,
+} from "@paperclipai/db";
+import { toolAccessService } from "../services/tool-access.js";
+import { createToolGatewayService } from "../services/tool-gateway.js";
+import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } from "./helpers/embedded-postgres.js";
+
+// These provider fixtures exercise Paperclip's real setup, vault, policy, and
+// run gateway. They do not establish live provider permissions or deployment.
+const actor = { actorType: "user" as const, actorId: "deployment-connector-owner" };
+const projectRef = "abcdefghijklmnopqrst";
+const teamId = "team_fixture123";
+const projectId = "prj_fixture123";
+const deploymentId = "dpl_fixture123";
+const environmentSecret = "synthetic-deployment-environment-secret";
+const providers = [
+  {
+    slug: "supabase",
+    methodKey: "management-api",
+    methodConfig: { projectRef },
+    read: { name: "supabase_get_project", parameters: {}, receipt: projectRef },
+    deploy: {
+      name: "supabase_deploy_edge_function",
+      parameters: {
+        slug: "hello", entrypoint_path: "index.ts", verify_jwt: true,
+        files: [{ name: "index.ts", content: 'Deno.serve(() => new Response("hello"))' }],
+      },
+      receipt: "hello",
+    },
+    configure: {
+      name: "supabase_update_auth_config",
+      parameters: { config: { site_url: "https://app.example", uri_allow_list: "https://app.example/**" } },
+      receipt: "https://app.example",
+    },
+    configureSecret: {
+      name: "supabase_upsert_edge_function_secret",
+      parameters: { name: "SERVICE_TOKEN", secretValue: environmentSecret },
+      receipt: "SERVICE_TOKEN",
+    },
+  },
+  {
+    slug: "vercel",
+    methodKey: "rest-api-key",
+    methodConfig: { teamId },
+    read: { name: "vercel_list_projects", parameters: {}, receipt: projectId },
+    deploy: {
+      name: "vercel_create_deployment",
+      parameters: { projectId, name: "fixture-app", files: [{ file: "index.html", content: "<h1>Hello</h1>" }], target: "preview" },
+      receipt: deploymentId,
+    },
+    configure: {
+      name: "vercel_upsert_environment_variable",
+      parameters: { projectId, key: "SERVICE_TOKEN", secretValue: environmentSecret, target: ["preview"] },
+      receipt: "SERVICE_TOKEN",
+    },
+  },
+] as const;
+type Provider = typeof providers[number];
+const external = process.env.PAPERCLIP_TEST_DATABASE_URL;
+const support = external ? { supported: true } : await getEmbeddedPostgresTestSupport();
+
+(support.supported ? describe : describe.skip)("Deployment connector governance", () => {
+  let db: ReturnType<typeof createDb>;
+  let temp: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>> | undefined;
+  beforeAll(async () => {
+    if (external) {
+      const url = new URL(external);
+      url.pathname = `/deployment_connectors_${randomUUID().replaceAll("-", "")}`;
+      await ensurePostgresDatabase(external, url.pathname.slice(1));
+      await applyPendingMigrations(url.toString());
+      db = createDb(url.toString());
+    } else {
+      temp = await startEmbeddedPostgresTestDatabase("deployment-connectors-");
+      db = createDb(temp.connectionString);
+    }
+  }, 30000);
+  afterAll(async () => { await db?.$client.end(); await temp?.cleanup(); });
+
+  async function createCompany() {
+    const [company] = await db.insert(companies).values({ name: "Deployment fixture", issuePrefix: `D${randomUUID().slice(0, 6)}` }).returning();
+    await db.insert(companyMemberships).values({ companyId: company.id, principalType: "user", principalId: actor.actorId, membershipRole: "admin", status: "active" });
+    return company;
+  }
+
+  async function fixture(provider: Provider, personal = false) {
+    const company = await createCompany();
+    let credential = `synthetic-${provider.slug}-credential`;
+    const request = vi.fn(async (url: string, init: RequestInit) => {
+      expect(new Headers(init.headers).get("Authorization")).toBe(`Bearer ${credential}`);
+      expect(["error", "manual"]).toContain(init.redirect);
+      const parsed = new URL(url);
+      const method = init.method ?? "GET";
+      if (provider.slug === "supabase") {
+        expect(parsed.origin).toBe("https://api.supabase.com");
+        const prefix = `/v1/projects/${projectRef}`;
+        if (parsed.pathname === prefix && method === "GET") return Response.json({ id: projectRef, name: "Fixture project", status: "ACTIVE_HEALTHY", organization_id: "fixture-org", region: "us-east-1" });
+        if (parsed.pathname === `${prefix}/config/auth`) {
+          if (method === "PATCH") expect(JSON.parse(String(init.body))).toEqual(providers[0].configure.parameters.config);
+          return Response.json({ site_url: "https://app.example", uri_allow_list: "https://app.example/**", jwt_secret: credential });
+        }
+        if (parsed.pathname === `${prefix}/functions/deploy` && method === "POST") {
+          expect(parsed.searchParams.get("slug")).toBe("hello");
+          expect(Buffer.isBuffer(init.body)).toBe(true);
+          const form = await new Response(init.body, { headers: init.headers }).formData();
+          expect(JSON.parse(String(form.get("metadata")))).toMatchObject({ entrypoint_path: "index.ts", verify_jwt: true });
+          expect(await (form.get("file") as Blob).text()).toBe(providers[0].deploy.parameters.files[0].content);
+          return Response.json({ id: randomUUID(), slug: "hello", name: "hello", status: "ACTIVE", version: 1 });
+        }
+        if (parsed.pathname === `${prefix}/secrets` && method === "POST") {
+          expect(JSON.parse(String(init.body))).toEqual([{ name: "SERVICE_TOKEN", value: environmentSecret }]);
+          return Response.json([{ name: "SERVICE_TOKEN", value: environmentSecret }]);
+        }
+      } else {
+        expect(parsed.origin).toBe("https://api.vercel.com");
+        if (parsed.pathname === `/v2/teams/${teamId}` && method === "GET") return Response.json({ id: teamId, name: "Fixture team" });
+        expect(parsed.searchParams.get("teamId")).toBe(teamId);
+        if (parsed.pathname === "/v10/projects" && method === "GET") return Response.json({ projects: [{ id: projectId, name: "fixture-app", accountId: teamId }], pagination: { count: 1, next: null } });
+        if (parsed.pathname === `/v9/projects/${projectId}` && method === "GET") return Response.json({ id: projectId, name: "fixture-app", accountId: teamId });
+        if (parsed.pathname === "/v13/deployments" && method === "POST") {
+          expect(JSON.parse(String(init.body))).toMatchObject({ project: projectId, files: [{ file: "index.html", data: "<h1>Hello</h1>", encoding: "utf-8" }] });
+          return Response.json({ id: deploymentId, projectId, name: "fixture-app", url: "fixture-app.vercel.app", readyState: "BUILDING" });
+        }
+        if (parsed.pathname === `/v10/projects/${projectId}/env` && method === "POST") {
+          expect(parsed.searchParams.get("upsert")).toBe("true");
+          expect(JSON.parse(String(init.body))).toMatchObject({ key: "SERVICE_TOKEN", value: environmentSecret, target: ["preview"], type: "encrypted" });
+          return Response.json({ created: { id: "env_fixture", key: "SERVICE_TOKEN", value: environmentSecret, target: ["preview"], type: "encrypted" }, failed: [] });
+        }
+      }
+      throw new Error(`Unexpected ${provider.slug} fixture request: ${method} ${parsed.pathname}`);
+    });
+    const service = toolAccessService(db, { remoteHttpRequest: request, remoteHttpEndpointLookup: async () => [{ address: "8.8.8.8", family: 4 }] });
+    const connected = await service.connectGalleryApp(company.id, {
+      galleryKey: provider.slug, connectionMethodKey: provider.methodKey,
+      configValues: provider.methodConfig, ...(personal ? { grantKind: "user" as const } : {}),
+      credentialValues: { "credentials.authorization": credential },
+    }, actor);
+    const [agent] = await db.insert(agents).values({ companyId: company.id, name: "Deployer", role: "engineer", adapterType: "process" }).returning();
+    await service.finishGalleryAppConnection(company.id, connected.connectionId, {
+      enabledCatalogEntryIds: connected.catalog.map(entry => entry.id), askFirstCatalogEntryIds: [], access: { agentIds: [agent.id] },
+    }, actor);
+    const [issue] = await db.insert(issues).values({ companyId: company.id, title: "Deploy fixture app", assigneeAgentId: agent.id }).returning();
+    const [run] = await db.insert(heartbeatRuns).values({ companyId: company.id, agentId: agent.id, issueId: issue.id,
+      scopeKind: "issue", invocationSource: "on_demand", status: "running", responsibleUserId: actor.actorId, contextSnapshot: { issueId: issue.id } }).returning();
+    const gateway = createToolGatewayService(db, { remoteHttpRequest: request, toolActionSigningSecret: "synthetic-deployment-action-signing-secret" });
+    const session = await gateway.createSession({ companyId: company.id, agentId: agent.id, runId: run.id, issueId: issue.id });
+    const tools = await gateway.listToolsForSession(session.token);
+    const call = (action: { name: string; parameters: unknown }) => {
+      const tool = tools.find(candidate => candidate.upstreamToolName === action.name);
+      expect(tool, action.name).toBeTruthy();
+      return gateway.executeTool({ sessionToken: session.token, tool: tool!.name, parameters: action.parameters, idempotencyKey: randomUUID() });
+    };
+    return { company, service, connected, agent, issue, run, request, gateway, session, tools, call,
+      credential: () => credential, rotateCredential: () => { credential = `synthetic-${provider.slug}-replacement`; return credential; } };
+  }
+
+  describe.each(providers)("$slug", provider => {
+    it("rejects unknown setup settings before saving credentials or contacting the provider", async () => {
+      const company = await createCompany();
+      const request = vi.fn(async () => { throw new Error("Unexpected provider request"); });
+      const service = toolAccessService(db, { remoteHttpRequest: request });
+      await expect(service.connectGalleryApp(company.id, {
+        galleryKey: provider.slug, connectionMethodKey: provider.methodKey,
+        configValues: { ...provider.methodConfig, serverUrl: "https://attacker.example" },
+        credentialValues: { "credentials.authorization": "synthetic-rejected-setup-key" },
+      }, actor)).rejects.toThrow();
+      expect(request).not.toHaveBeenCalled();
+      expect(await db.select().from(toolConnections).where(eq(toolConnections.companyId, company.id))).toHaveLength(0);
+      expect(await db.select().from(companySecrets).where(eq(companySecrets.companyId, company.id))).toHaveLength(0);
+    });
+
+    it("cleans up failed personal setup without echoing provider credentials", async () => {
+      const company = await createCompany();
+      const credential = "synthetic-invalid-provider-token";
+      const request = vi.fn(async () => Response.json({ error: `Rejected ${credential}` }, { status: 401 }));
+      const service = toolAccessService(db, { remoteHttpRequest: request, remoteHttpEndpointLookup: async () => [{ address: "8.8.8.8", family: 4 }] });
+      let failure: unknown;
+      try {
+        await service.connectGalleryApp(company.id, {
+          galleryKey: provider.slug, connectionMethodKey: provider.methodKey, configValues: provider.methodConfig,
+          grantKind: "user", credentialValues: { "credentials.authorization": credential },
+        }, actor);
+      } catch (error) { failure = error; }
+      expect(failure).toBeInstanceOf(Error);
+      expect(String(failure)).not.toContain(credential);
+      expect(request).toHaveBeenCalled();
+      expect(await db.select().from(toolConnections).where(eq(toolConnections.companyId, company.id))).toHaveLength(0);
+      const secrets = await db.select().from(companySecrets).where(eq(companySecrets.companyId, company.id));
+      expect(secrets.every(secret => secret.status !== "active" || secret.deletedAt !== null)).toBe(true);
+      expect(await db.select().from(userSecretDeclarations).where(eq(userSecretDeclarations.companyId, company.id))).toHaveLength(0);
+    });
+
+    it.each([false, true])("vaults the selected identity and executes governed deployment/configuration (personal=%s)", async personal => {
+      const f = await fixture(provider, personal);
+      const [grant] = await db.select().from(connectionGrants).where(eq(connectionGrants.connectionId, f.connected.connectionId));
+      expect(grant).toMatchObject({ kind: personal ? "user" : "organization", status: "active" });
+      expect(grant.credentialSecretRefs).toHaveLength(1);
+      expect(grant.credentialSecretRefs[0].configPath).toBe("credentials.authorization");
+      const [secret] = await db.select().from(companySecrets).where(eq(companySecrets.id, grant.credentialSecretRefs[0].secretId));
+      expect(secret).toMatchObject({ scope: personal ? "user" : "company", ownerUserId: personal ? actor.actorId : null });
+      if (personal) {
+        const declarations = await db.select().from(userSecretDeclarations).where(eq(userSecretDeclarations.targetId, f.connected.connectionId));
+        expect(declarations).toEqual(expect.arrayContaining([expect.objectContaining({
+          configPath: "credentials.authorization", userSecretDefinitionId: secret.userSecretDefinitionId,
+        })]));
+        expect(f.connected.connection.credentialSecretRefs).toEqual([]);
+      }
+      expect(f.connected.catalog.find(entry => entry.toolName === provider.read.name)).toMatchObject({ isReadOnly: true, riskLevel: "read" });
+      for (const action of [provider.deploy, provider.configure]) {
+        expect(f.connected.catalog.find(entry => entry.toolName === action.name)).toMatchObject({ isReadOnly: false });
+      }
+      expect(JSON.stringify(f.connected)).not.toContain(f.credential());
+      f.request.mockClear();
+      await expect(f.service.mintConnectionTokenForAgent({
+        connectionId: f.connected.connectionId, companyId: f.company.id, agentId: f.agent.id, runId: f.run.id, body: {},
+      })).rejects.toMatchObject({ status: 403, message: expect.stringContaining("cannot be exported") });
+      expect(f.request).not.toHaveBeenCalled();
+      const actions = [provider.read, provider.deploy, provider.configure, ...(provider.slug === "supabase" ? [provider.configureSecret] : [])];
+      for (const action of actions) {
+        const result = await f.call(action);
+        expect(JSON.stringify(result)).toContain(action.receipt);
+        expect(JSON.stringify(result)).not.toContain(f.credential());
+        expect(JSON.stringify(result)).not.toContain(environmentSecret);
+      }
+      if (provider.slug === "supabase") {
+        expect(f.request.mock.calls.some(([url, init]) => new URL(url).pathname === `/v1/projects/${projectRef}/config/auth` && init.method === "PATCH")).toBe(true);
+      }
+      const invocations = await db.select().from(toolInvocations).where(eq(toolInvocations.connectionId, f.connected.connectionId));
+      expect(invocations).toHaveLength(actions.length);
+      expect(invocations.every(invocation => invocation.runId === f.run.id && invocation.issueId === f.issue.id && invocation.agentId === f.agent.id && invocation.status === "succeeded")).toBe(true);
+      const audits = await db.select().from(toolAccessAuditEvents).where(eq(toolAccessAuditEvents.companyId, f.company.id));
+      const activity = await db.select().from(activityLog).where(eq(activityLog.companyId, f.company.id));
+      const visible = JSON.stringify({ connection: await f.service.getConnection(f.connected.connectionId), invocations, audits, activity });
+      expect(visible).not.toContain(f.credential());
+      expect(visible).not.toContain(environmentSecret);
+    });
+
+    it("enforces changed Off policies and quarantined deployment contracts on an existing run", async () => {
+      const f = await fixture(provider);
+      await f.service.finishGalleryAppConnection(f.company.id, f.connected.connectionId, {
+        enabledCatalogEntryIds: f.connected.catalog.filter(entry => entry.toolName !== provider.configure.name).map(entry => entry.id),
+        askFirstCatalogEntryIds: [], access: { agentIds: [f.agent.id] },
+      }, actor);
+      f.request.mockClear();
+      await expect(f.call(provider.configure)).rejects.toThrow();
+      expect(f.request).not.toHaveBeenCalled();
+      const deployment = f.connected.catalog.find(entry => entry.toolName === provider.deploy.name)!;
+      await db.update(toolCatalogEntries).set({ schemaHash: "earlier-schema", versionHash: "earlier-version" }).where(eq(toolCatalogEntries.id, deployment.id));
+      expect((await f.gateway.listToolsForSession(f.session.token)).some(tool => tool.upstreamToolName === provider.deploy.name)).toBe(false);
+      await expect(f.call(provider.deploy)).rejects.toThrow();
+      expect(f.request).not.toHaveBeenCalled();
+      const refreshed = await f.service.refreshCatalog(f.connected.connectionId, actor, { enableAllByDefault: true });
+      expect(refreshed.catalog.find(entry => entry.toolName === provider.deploy.name)?.status).toBe("quarantined");
+      f.request.mockClear();
+      await expect(f.call(provider.deploy)).rejects.toThrow();
+      expect(f.request).not.toHaveBeenCalled();
+    });
+
+    it("posts an Ask-first deployment request without reaching the provider", async () => {
+      const f = await fixture(provider);
+      const deployment = f.connected.catalog.find(entry => entry.toolName === provider.deploy.name)!;
+      await f.service.finishGalleryAppConnection(f.company.id, f.connected.connectionId, {
+        enabledCatalogEntryIds: f.connected.catalog.map(entry => entry.id),
+        askFirstCatalogEntryIds: [deployment.id], access: { agentIds: [f.agent.id] },
+      }, actor);
+      f.request.mockClear();
+      await expect(f.call(provider.deploy)).rejects.toMatchObject({ reasonCode: "approval_required" });
+      expect(f.request).not.toHaveBeenCalled();
+      const requests = await db.select().from(toolActionRequests).where(eq(toolActionRequests.companyId, f.company.id));
+      expect(requests).toHaveLength(1);
+      expect(requests[0]).toMatchObject({ status: "pending", companyId: f.company.id, issueId: f.issue.id, requestedByAgentId: f.agent.id });
+      expect(JSON.stringify(requests)).not.toContain(f.credential());
+    });
+
+    it("encrypts pending secret configuration and executes the original value only after approval", async () => {
+      const f = await fixture(provider);
+      const configure = provider.slug === "supabase" ? provider.configureSecret : provider.configure;
+      const entry = f.connected.catalog.find(candidate => candidate.toolName === configure.name)!;
+      await f.service.finishGalleryAppConnection(f.company.id, f.connected.connectionId, {
+        enabledCatalogEntryIds: f.connected.catalog.map(candidate => candidate.id),
+        askFirstCatalogEntryIds: [entry.id], access: { agentIds: [f.agent.id] },
+      }, actor);
+      f.request.mockClear();
+      await expect(f.call(configure)).rejects.toMatchObject({ reasonCode: "approval_required" });
+      expect(f.request).not.toHaveBeenCalled();
+      const [pending] = await db.select().from(toolActionRequests).where(eq(toolActionRequests.companyId, f.company.id));
+      expect(pending.status).toBe("pending");
+      expect(pending.signedArguments).toEqual(expect.any(String));
+      expect(Buffer.from(pending.signedArguments!, "base64url").toString("utf8")).not.toContain(environmentSecret);
+      expect(JSON.stringify(pending)).not.toContain(environmentSecret);
+      const approved = await f.gateway.approveActionRequest({ companyId: f.company.id, actionRequestId: pending.id, actor: { userId: actor.actorId } });
+      expect(approved).toMatchObject({ status: "executed" });
+      // Provider fixture assertions check the decrypted original value exactly.
+      expect(f.request.mock.calls.filter(([, init]) => init.method === "POST")).toHaveLength(1);
+      const invocations = await db.select().from(toolInvocations).where(eq(toolInvocations.companyId, f.company.id));
+      const audits = await db.select().from(toolAccessAuditEvents).where(eq(toolAccessAuditEvents.companyId, f.company.id));
+      const requests = await db.select().from(toolActionRequests).where(eq(toolActionRequests.companyId, f.company.id));
+      expect(JSON.stringify({ approved, invocations, audits, requests })).not.toContain(environmentSecret);
+      expect(JSON.stringify({ approved, invocations, audits, requests })).not.toContain(f.credential());
+    });
+
+    it("keeps another company and another responsible user outside a personal connection", async () => {
+      const f = await fixture(provider, true);
+      const foreign = await createCompany();
+      await expect(f.service.getConnection(f.connected.connectionId, foreign.id)).rejects.toMatchObject({ status: 404 });
+      await expect(f.service.reconnectGalleryApp(f.connected.connectionId, foreign.id, {
+        credentialValues: { "credentials.authorization": "synthetic-foreign-replacement" },
+      }, actor)).rejects.toMatchObject({ status: 404 });
+      const [agent] = await db.insert(agents).values({ companyId: foreign.id, name: "Foreign deployer", role: "engineer", adapterType: "process" }).returning();
+      const [run] = await db.insert(heartbeatRuns).values({ companyId: foreign.id, agentId: agent.id,
+        scopeKind: "company", invocationSource: "on_demand", status: "running", responsibleUserId: actor.actorId }).returning();
+      const session = await f.gateway.createSession({ companyId: foreign.id, agentId: agent.id, runId: run.id });
+      const deploy = f.tools.find(tool => tool.upstreamToolName === provider.deploy.name)!;
+      expect((await f.gateway.listToolsForSession(session.token)).some(tool => tool.upstreamToolName === provider.deploy.name)).toBe(false);
+      f.request.mockClear();
+      await expect(f.gateway.executeTool({ sessionToken: session.token, tool: deploy.name, parameters: provider.deploy.parameters })).rejects.toThrow();
+      await db.insert(companyMemberships).values({ companyId: f.company.id, principalType: "user", principalId: "another-user", membershipRole: "admin", status: "active" });
+      await expect(f.service.reconnectGalleryApp(f.connected.connectionId, f.company.id, {
+        credentialValues: { "credentials.authorization": "synthetic-foreign-replacement" },
+      }, { actorType: "user", actorId: "another-user" })).rejects.toMatchObject({ status: 403 });
+      await db.update(heartbeatRuns).set({ responsibleUserId: "another-user" }).where(eq(heartbeatRuns.id, f.run.id));
+      await expect(f.call(provider.deploy)).rejects.toThrow();
+      expect(f.request).not.toHaveBeenCalled();
+    });
+
+    it("rotates credentials without widening saved policies and removes access and owned secrets", async () => {
+      const f = await fixture(provider, true);
+      await f.service.finishGalleryAppConnection(f.company.id, f.connected.connectionId, {
+        enabledCatalogEntryIds: f.connected.catalog.filter(entry => entry.toolName !== provider.deploy.name).map(entry => entry.id),
+        askFirstCatalogEntryIds: [], access: { agentIds: [f.agent.id] },
+      }, actor);
+      const replacement = f.rotateCredential();
+      const reconnected = await f.service.reconnectGalleryApp(f.connected.connectionId, f.company.id, {
+        credentialValues: { "credentials.authorization": replacement },
+      }, actor);
+      expect(reconnected.connection.id).toBe(f.connected.connectionId);
+      expect(JSON.stringify(reconnected)).not.toContain(replacement);
+      expect(JSON.stringify(await f.call(provider.read))).toContain(provider.read.receipt);
+      f.request.mockClear();
+      await expect(f.call(provider.deploy)).rejects.toThrow();
+      expect(f.request).not.toHaveBeenCalled();
+      const removed = await f.service.archiveConnection(f.connected.connectionId, f.company.id, actor);
+      expect(removed.connection).toMatchObject({ status: "archived", enabled: false });
+      expect(removed.removal.secretsRevoked).toBeGreaterThan(0);
+      expect(JSON.stringify(removed)).not.toContain(replacement);
+      const secrets = await db.select().from(companySecrets).where(eq(companySecrets.companyId, f.company.id));
+      expect(secrets.every(secret => secret.status !== "active" || secret.deletedAt !== null)).toBe(true);
+      expect((await f.gateway.listToolsForSession(f.session.token)).some(tool => tool.upstreamToolName === provider.read.name)).toBe(false);
+      f.request.mockClear();
+      await expect(f.call(provider.read)).rejects.toThrow();
+      expect(f.request).not.toHaveBeenCalled();
+    });
+  });
+
+  it("keeps an archived Supabase MCP identity separate when connecting Management API", async () => {
+    const provider = providers[0];
+    const f = await fixture(provider);
+    await f.service.archiveConnection(f.connected.connectionId, f.company.id, actor);
+    await db.update(toolConnections).set({ transport: "mcp_remote", config: {
+      ...f.connected.connection.config, url: "https://mcp.supabase.com/mcp", connectionMethodKey: "mcp-api-key",
+    } }).where(eq(toolConnections.id, f.connected.connectionId));
+    await db.update(toolApplications).set({ type: "mcp_http" }).where(eq(toolApplications.id, f.connected.application.id));
+    const input = {
+      galleryKey: provider.slug, connectionMethodKey: provider.methodKey, configValues: provider.methodConfig,
+      credentialValues: { "credentials.authorization": f.credential() },
+    };
+    f.request.mockClear();
+    for (const retained of [{ reconnectConnectionId: f.connected.connectionId }, { applicationId: f.connected.application.id }]) {
+      await expect(f.service.connectGalleryApp(f.company.id, { ...input, ...retained }, actor)).rejects.toMatchObject({
+        status: 409, details: { code: "connection_transport_change_not_supported" },
+      });
+    }
+    expect(f.request).not.toHaveBeenCalled();
+    const [retained] = await db.select().from(toolConnections).where(eq(toolConnections.id, f.connected.connectionId));
+    expect(retained).toMatchObject({ status: "archived", enabled: false, transport: "mcp_remote", credentialSecretRefs: [] });
+    const connected = await f.service.connectGalleryApp(f.company.id, input, actor);
+    expect(connected.connectionId).not.toBe(f.connected.connectionId);
+    expect(connected.application.id).not.toBe(f.connected.application.id);
+    expect(connected.application.type).toBe("rest_api");
+    expect(connected.connection.transport).toBe("rest_api");
+    await f.service.finishGalleryAppConnection(f.company.id, connected.connectionId, {
+      enabledCatalogEntryIds: connected.catalog.map(entry => entry.id), askFirstCatalogEntryIds: [], access: { agentIds: [f.agent.id] },
+    }, actor);
+    const tools = await f.gateway.listToolsForSession(f.session.token);
+    const read = tools.find(tool => tool.upstreamToolName === provider.read.name)!;
+    expect(read).toBeTruthy();
+    expect(JSON.stringify(await f.gateway.executeTool({ sessionToken: f.session.token, tool: read.name, parameters: {} }))).toContain(projectRef);
+  });
+});

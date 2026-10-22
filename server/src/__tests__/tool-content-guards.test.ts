@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import { createHmac } from "node:crypto";
 import {
   canonicalToolArguments,
   readSignedToolArguments,
+  readSignedToolArgumentsPayload,
   resolveToolActionSigningSecret,
   signToolArguments,
   ToolActionSigningSecretMissingError,
@@ -58,6 +60,93 @@ describe("tool content guards", () => {
     expect(() =>
       resolveToolActionSigningSecret({}),
     ).toThrow("PAPERCLIP_TOOL_ACTION_SIGNING_SECRET");
+  });
+
+  it("encrypts secret-bearing approvals at rest and round trips the complete approval binding", () => {
+    const args = { projectId: "prj_fixture", key: "API_KEY", secretValue: "fixture-private-environment-value", target: ["preview"] };
+    const input = {
+      invocationId: "invocation-sensitive", toolName: "vercel_upsert_environment_variable",
+      canonicalArguments: canonicalToolArguments(args), approvalSnapshot: { connectionId: "connection-1", revision: 3 },
+      executionOnApprove: true, identityContextId: "identity-1", signingSecret,
+    };
+    const signedArguments = signToolArguments(input);
+    const decoded = Buffer.from(signedArguments, "base64url").toString("utf8");
+    const envelope = JSON.parse(decoded);
+    expect(envelope).toMatchObject({ version: 2, alg: "A256GCM" });
+    expect(envelope.payload).toBeUndefined();
+    expect(decoded).not.toContain(args.secretValue);
+    expect(decoded).not.toContain("canonicalArguments");
+    expect(Buffer.from(envelope.ciphertext, "base64url").toString("utf8")).not.toContain(args.secretValue);
+    expect(signToolArguments(input)).not.toBe(signedArguments);
+    expect(readSignedToolArgumentsPayload({ ...input, signedArguments })).toEqual({
+      arguments: args, approvalSnapshot: input.approvalSnapshot, executionOnApprove: true, identityContextId: input.identityContextId,
+    });
+    expect(verifyToolArgumentsSignature({ ...input, signedArguments })).toBe(true);
+    expect(verifyToolArgumentsSignature({ ...input, signedArguments, canonicalArguments: canonicalToolArguments({ ...args, secretValue: "tampered" }) })).toBe(false);
+    expect(verifyToolArgumentsSignature({ ...input, signedArguments, approvalSnapshot: { connectionId: "connection-2", revision: 3 } })).toBe(false);
+    expect(readSignedToolArgumentsPayload({ ...input, signedArguments, invocationId: "another-invocation" })).toBeNull();
+    expect(readSignedToolArgumentsPayload({ ...input, signedArguments, toolName: "another-tool" })).toBeNull();
+  });
+
+  it.each([
+    { body: { credentials: { apiKey: "nested-private-value" } } },
+    [{ secretValue: "root-array-private-value" }],
+    "Authorization: Bearer abcdefghijklmnopqrstuvwxyz123456",
+  ])("encrypts sensitive nested or root arguments: %j", args => {
+    const input = { invocationId: "invocation-1", toolName: "fixture", canonicalArguments: canonicalToolArguments(args), signingSecret };
+    const signedArguments = signToolArguments(input);
+    expect(JSON.parse(Buffer.from(signedArguments, "base64url").toString()).version).toBe(2);
+    expect(readSignedToolArguments({ ...input, signedArguments })).toEqual(args);
+  });
+
+  it("rejects the wrong encryption key, including when the environment contains the correct key", () => {
+    const input = { invocationId: "invocation-1", toolName: "fixture", canonicalArguments: canonicalToolArguments({ secretValue: "private-value" }), signingSecret };
+    const signedArguments = signToolArguments(input);
+    vi.stubEnv("PAPERCLIP_TOOL_ACTION_SIGNING_SECRET", signingSecret);
+    try {
+      expect(readSignedToolArguments({ ...input, signedArguments, signingSecret: "wrong-key" })).toBeNull();
+      expect(verifyToolArgumentsSignature({ ...input, signedArguments, signingSecret: "wrong-key" })).toBe(false);
+      expect(readSignedToolArguments({ ...input, signedArguments, signingSecret: undefined })).toEqual({ secretValue: "private-value" });
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it.each(["iv", "ciphertext", "tag", "version", "alg"])("rejects tampering with the encrypted %s field", field => {
+    const input = { invocationId: "invocation-1", toolName: "fixture", canonicalArguments: canonicalToolArguments({ secretValue: "private-value" }), signingSecret };
+    const encoded = signToolArguments(input);
+    const envelope = JSON.parse(Buffer.from(encoded, "base64url").toString());
+    if (field === "version") envelope.version = 1;
+    else if (field === "alg") envelope.alg = "HS256";
+    else {
+      const bytes = Buffer.from(envelope[field], "base64url");
+      bytes[0] ^= 1;
+      envelope[field] = bytes.toString("base64url");
+    }
+    const signedArguments = Buffer.from(JSON.stringify(envelope)).toString("base64url");
+    expect(readSignedToolArguments({ ...input, signedArguments })).toBeNull();
+    expect(verifyToolArgumentsSignature({ ...input, signedArguments })).toBe(false);
+  });
+
+  it("keeps ordinary new approvals as v1 and verifies historical v1 approvals containing secrets", () => {
+    const input = { invocationId: "invocation-legacy", toolName: "fixture", canonicalArguments: canonicalToolArguments({ secretValue: "legacy-private-value" }), signingSecret };
+    // This fixture uses the historical writer contract independently of the
+    // current signToolArguments, which now encrypts this input.
+    const payload = canonicalToolArguments({ invocationId: input.invocationId, toolName: input.toolName, canonicalArguments: input.canonicalArguments });
+    const signature = createHmac("sha256", signingSecret).update(payload).digest("base64url");
+    const signedArguments = Buffer.from(JSON.stringify({ version: 1, alg: "HS256", payload, signature })).toString("base64url");
+    expect(readSignedToolArguments({ ...input, signedArguments })).toEqual({ secretValue: "legacy-private-value" });
+    expect(verifyToolArgumentsSignature({ ...input, signedArguments })).toBe(true);
+    expect(verifyToolArgumentsSignature({ ...input, signedArguments, signingSecret: "wrong-key" })).toBe(false);
+    const ordinary = signToolArguments({ ...input, canonicalArguments: canonicalToolArguments({ projectId: "prj_fixture", target: "preview" }) });
+    expect(JSON.parse(Buffer.from(ordinary, "base64url").toString()).version).toBe(1);
+  });
+
+  it("still requires the configured secret when reading an encrypted approval", () => {
+    const input = { invocationId: "invocation-1", toolName: "fixture", canonicalArguments: canonicalToolArguments({ secretValue: "private-value" }), signingSecret };
+    const signedArguments = signToolArguments(input);
+    vi.stubEnv("PAPERCLIP_TOOL_ACTION_SIGNING_SECRET", "");
+    try {
+      expect(() => readSignedToolArguments({ ...input, signedArguments, signingSecret: undefined })).toThrow(ToolActionSigningSecretMissingError);
+    } finally { vi.unstubAllEnvs(); }
   });
 
   it("redacts sensitive argument values before summarizing them", async () => {

@@ -328,7 +328,7 @@ function summarizeAndRedact(value: unknown): RedactionResult {
     const out: Record<string, unknown> = {};
     for (const [key, nested] of Object.entries(current)) {
       const nestedPath = path ? `${path}.${key}` : key;
-      if (SENSITIVE_KEY_RE.test(key)) {
+      if (SENSITIVE_KEY_RE.test(key.replace(/([a-z0-9])([A-Z])/g, "$1_$2"))) {
         redactedFields.push(nestedPath);
         out[key] = "[REDACTED]";
       } else {

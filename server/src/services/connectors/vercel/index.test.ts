@@ -1,0 +1,182 @@
+import { describe, expect, it, vi } from "vitest";
+import { redactEventPayload } from "../../../redaction.js";
+import { descriptorHash, stableHash } from "../../tool-catalog-hash.js";
+import { isCurrentVercelCatalogEntry, isVercelConnection, VERCEL_API_URL, VERCEL_METHOD, VERCEL_TOOLS, vercelClient, vercelRisk, type VercelRequest } from "./index.js";
+
+const token = "fixture-vercel-private-token";
+const headers = { Authorization: `Bearer ${token}` };
+const teamId = "team_fixture123";
+const project = { id: "prj_fixture123", name: "fixture", accountId: teamId, framework: null, nodeVersion: "22.x" };
+const deployment = { id: "dpl_fixture123", projectId: project.id, url: "fixture.vercel.app", readyState: "READY" };
+const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
+function fixture(respond: (url: URL, init: RequestInit) => Response | Promise<Response> = () => json({})) {
+  const request = vi.fn<VercelRequest>(async (url, init) => {
+    const parsed = new URL(url);
+    if (init.method === "GET" && parsed.pathname === `/v9/projects/${project.id}`) return json(project);
+    if (init.method === "GET" && parsed.pathname === `/v13/deployments/${deployment.id}`) return json(deployment);
+    return respond(parsed, init);
+  });
+  return { request, client: vercelClient(headers, request, teamId) };
+}
+
+describe("Vercel deployment connector", () => {
+  it("admits only the exact reviewed connection and catalog contract", () => {
+    const config = { sourceTemplateKey: "vercel", connectionMethodKey: VERCEL_METHOD, url: VERCEL_API_URL };
+    expect(isVercelConnection({ transport: "rest_api", config })).toBe(true);
+    expect(isVercelConnection({ transport: "rest_api", config: { ...config, url: `${VERCEL_API_URL}/` } })).toBe(true);
+    expect(isVercelConnection({ transport: "rest_api", config: { ...config, url: `${VERCEL_API_URL}/?teamId=team_other` } })).toBe(false);
+    expect(isVercelConnection({ transport: "mcp_remote", config })).toBe(false);
+    expect(isVercelConnection({ transport: "rest_api", config: { ...config, url: "https://evil.invalid" } })).toBe(false);
+    expect(VERCEL_TOOLS).toHaveLength(17);
+    for (const tool of VERCEL_TOOLS) {
+      const entry = { toolName: tool.name, versionHash: descriptorHash(tool, vercelRisk(tool.name)), schemaHash: stableHash(tool.inputSchema), riskLevel: vercelRisk(tool.name) };
+      expect(isCurrentVercelCatalogEntry(entry)).toBe(true);
+      expect(isCurrentVercelCatalogEntry({ ...entry, schemaHash: "stale" })).toBe(false);
+      expect(isCurrentVercelCatalogEntry({ ...entry, riskLevel: "other" })).toBe(false);
+    }
+    expect(vercelRisk("vercel_create_deployment")).toBe("write");
+    expect(vercelRisk("vercel_upsert_environment_variable")).toBe("write");
+    expect(vercelRisk("vercel_delete_project")).toBe("destructive");
+    expect(vercelRisk("unknown")).toBe("destructive");
+  });
+
+  it("probes the configured team with the vaulted credential and forbids redirects", async () => {
+    const { request, client } = fixture(() => json({ id: teamId, name: "Fixture" }));
+    expect(await client.probe()).toEqual({ teamId });
+    const [url, init] = request.mock.calls[0]!;
+    expect(url).toBe(`${VERCEL_API_URL}/v2/teams/${teamId}?teamId=${teamId}`);
+    expect(init.redirect).toBe("error");
+    expect(new Headers(init.headers).get("authorization")).toBe(`Bearer ${token}`);
+    const wrong = fixture(() => json({ id: "team_other" }));
+    await expect(wrong.client.probe()).rejects.toMatchObject({ status: 403 });
+  });
+
+  it("rejects malformed credentials without echoing them from header validation", () => {
+    expect(() => vercelClient({ Authorization: `Bearer ${token}\r\nInjected: value` }, vi.fn(), teamId)).toThrow("Reconnect Vercel to restore its access token.");
+  });
+
+  it("lists only team projects, bounds pagination and excludes embedded environment values", async () => {
+    const { request, client } = fixture(() => json({ projects: [{ ...project, env: [{ value: "hidden" }] }], pagination: { next: "123" } }));
+    expect(await client.invoke("vercel_list_projects", { limit: 3, from: "99" })).toEqual({ projects: [project], pagination: { next: "123" } });
+    expect(new URL(request.mock.calls[0]![0]).searchParams.get("teamId")).toBe(teamId);
+    expect(new URL(request.mock.calls[0]![0]).searchParams.get("from")).toBe("99");
+  });
+
+  it.each([
+    ["vercel_list_projects", { teamId: "team_other" }],
+    ["vercel_get_project", { projectId: "../other" }],
+    ["vercel_create_deployment", { projectId: project.id, name: "fixture" }],
+    ["vercel_create_deployment", { projectId: project.id, name: "fixture", files: [{ file: "index.html", content: "hi" }], deploymentId: deployment.id }],
+    ["vercel_create_deployment", { projectId: project.id, name: "fixture", files: [{ file: "../secret", content: "hi" }] }],
+    ["vercel_create_deployment", { projectId: project.id, name: "fixture", files: [{ file: "image.png", content: "not base64!", encoding: "base64" }] }],
+    ["vercel_create_deployment", { projectId: project.id, name: "fixture", files: [{ file: "index.html", content: "hi" }], target: "custom-production" }],
+    ["vercel_upsert_environment_variable", { projectId: project.id, key: "KEY", secretValue: "fixture", target: ["development"], type: "sensitive" }],
+  ])("rejects invalid %s input before provider requests", async (name, args) => {
+    const { request, client } = fixture();
+    await expect(client.invoke(name, args)).rejects.toMatchObject({ status: 422 });
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("checks project ownership before mutation even when the provider accepts a foreign ID", async () => {
+    const request = vi.fn<VercelRequest>(async () => json({ ...project, accountId: "team_other" }));
+    await expect(vercelClient(headers, request, teamId).invoke("vercel_update_project", { projectId: project.id, settings: { framework: "nextjs" } })).rejects.toMatchObject({ status: 403 });
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request.mock.calls[0]![1].method).toBe("GET");
+  });
+
+  it("deploys inline files to the verified project with preview defaults and first-deployment settings", async () => {
+    const { request, client } = fixture(() => json({ ...deployment, env: ["hidden"], token }));
+    expect(await client.invoke("vercel_create_deployment", { projectId: project.id, name: "fixture", files: [{ file: "index.html", content: "<h1>Preview</h1>" }] })).toEqual(deployment);
+    const [url, init] = request.mock.calls[1]!;
+    expect(url).toBe(`${VERCEL_API_URL}/v13/deployments?teamId=${teamId}`);
+    expect(JSON.parse(String(init.body))).toEqual({ name: "fixture", project: project.id, files: [{ file: "index.html", data: "<h1>Preview</h1>", encoding: "utf-8" }], projectSettings: { framework: null, nodeVersion: "22.x" } });
+  });
+
+  it("deploys GitHub sources and sends an explicit production target", async () => {
+    const { request, client } = fixture(() => json(deployment));
+    const gitSource = { type: "github", repoId: "123", ref: "main" };
+    await client.invoke("vercel_create_deployment", { projectId: project.id, name: "fixture", gitSource, target: "production" });
+    expect(JSON.parse(String(request.mock.calls[1]![1].body))).toMatchObject({ gitSource, target: "production", project: project.id });
+  });
+
+  it("checks deployment project identity before deleting, cancelling, or redeploying", async () => {
+    const request = vi.fn<VercelRequest>(async (url) => new URL(url).pathname.startsWith("/v9/projects/") ? json(project) : json({ ...deployment, projectId: "prj_other" }));
+    await expect(vercelClient(headers, request, teamId).invoke("vercel_delete_deployment", { projectId: project.id, deploymentId: deployment.id })).rejects.toMatchObject({ status: 403 });
+    expect(request.mock.calls.every(([, init]) => init.method === "GET")).toBe(true);
+  });
+
+  it("rejects a deployment list containing another project's data", async () => {
+    const { client } = fixture(() => json({ deployments: [{ ...deployment, projectId: "prj_other" }] }));
+    await expect(client.invoke("vercel_list_deployments", { projectId: project.id })).rejects.toMatchObject({ status: 403 });
+  });
+
+  it("updates project configuration and returns only the saved settings", async () => {
+    const settings = { framework: "vite", buildCommand: "pnpm build", outputDirectory: "dist", rootDirectory: null };
+    const { request, client } = fixture(() => json({ ...project, ...settings, env: [{ value: "hidden" }] }));
+    expect(await client.invoke("vercel_update_project", { projectId: project.id, settings })).toEqual({ ...project, ...settings });
+    const [url, init] = request.mock.calls[1]!;
+    expect(url).toBe(`${VERCEL_API_URL}/v9/projects/${project.id}?teamId=${teamId}`);
+    expect(init.method).toBe("PATCH");
+    expect(JSON.parse(String(init.body))).toEqual(settings);
+  });
+
+  it("returns domain verification records for an attached domain without purchasing or changing DNS", async () => {
+    const response = { name: "app.example.com", verified: false, verification: [{ type: "TXT", domain: "_vercel.example.com", value: "vc-domain-verify=fixture" }] };
+    const { request, client } = fixture(() => json(response));
+    expect(await client.invoke("vercel_add_domain", { projectId: project.id, domain: response.name })).toEqual(response);
+    expect(new URL(request.mock.calls[1]![0]).pathname).toBe(`/v10/projects/${project.id}/domains`);
+    expect(JSON.parse(String(request.mock.calls[1]![1].body))).toEqual({ name: response.name });
+  });
+
+  it("sets encrypted environment values without echoing provider secrets or storing them in audit snapshots", async () => {
+    const secretValue = "fixture-environment-value";
+    const args = { projectId: project.id, key: "API_KEY", secretValue, target: ["preview"] };
+    const { request, client } = fixture(() => json({ created: { id: "env_fixture", key: "API_KEY", value: secretValue, vsmValue: "hidden", type: "encrypted", target: ["preview"] }, failed: [] }));
+    expect(await client.invoke("vercel_upsert_environment_variable", args)).toEqual({ id: "env_fixture", key: "API_KEY", type: "encrypted", target: ["preview"] });
+    expect(JSON.parse(String(request.mock.calls[1]![1].body))).toEqual({ key: "API_KEY", value: secretValue, type: "encrypted", target: ["preview"] });
+    expect(JSON.stringify(redactEventPayload(args))).not.toContain(secretValue);
+    expect(new URL(request.mock.calls[1]![0]).searchParams.get("upsert")).toBe("true");
+  });
+
+  it("treats environment partial-failure responses as failure without exposing their values", async () => {
+    const { client } = fixture(() => json({ created: [], failed: [{ error: { message: token, value: "private-value" } }] }));
+    await expect(client.invoke("vercel_upsert_environment_variable", { projectId: project.id, key: "API_KEY", secretValue: "private-value", target: ["preview"] })).rejects.toMatchObject({ status: 422, message: "Vercel rejected the environment variable. Check the key, targets and provider permissions." });
+  });
+
+  it("never decrypts environment variables and strips values from metadata", async () => {
+    const { request, client } = fixture(() => json({ envs: [{ id: "env_fixture", key: "API_KEY", value: "private-value", decrypted: true }] }));
+    expect(await client.invoke("vercel_list_environment_variables", { projectId: project.id })).toEqual({ envs: [{ id: "env_fixture", key: "API_KEY" }] });
+    expect(new URL(request.mock.calls[1]![0]).searchParams.get("decrypt")).toBe("false");
+  });
+
+  it("reports safe provider failures and never retries uncertain writes", async () => {
+    const { request, client } = fixture(() => { throw new Error(`network error ${token}`); });
+    await expect(client.invoke("vercel_create_project", { name: "fixture" })).rejects.toMatchObject({ status: 502, message: "Vercel did not return a result. A submitted operation may still complete; inspect its state before retrying." });
+    expect(request).toHaveBeenCalledTimes(1);
+    const rejected = fixture(() => json({ error: { message: token } }, 403));
+    await expect(rejected.client.invoke("vercel_create_project", { name: "fixture" })).rejects.toMatchObject({ status: 403, message: "Vercel denied access. Check the access token's team scope, expiration and role, then reconnect." });
+  });
+
+  it("redacts exact connection tokens even if returned in allowed fields or object keys", async () => {
+    const { client } = fixture(() => json({ domains: [{ name: token, verification: [{ [token]: token }] }] }));
+    expect(JSON.stringify(await client.invoke("vercel_list_domains", { projectId: project.id }))).not.toContain(token);
+  });
+
+  it("expires slow prerequisites without a late write and keeps other requests responsive", async () => {
+    let finish!: (response: Response) => void;
+    const request = vi.fn<VercelRequest>(() => new Promise(resolve => { finish = resolve; }));
+    const pending = vercelClient(headers, request, teamId, new AbortController().signal, Date.now() + 30)
+      .invoke("vercel_delete_project", { projectId: project.id });
+    const assertion = expect(pending).rejects.toMatchObject({ status: 504 });
+    expect(await fixture(() => json({ id: teamId })).client.probe()).toEqual({ teamId });
+    await assertion;
+    finish(json(project));
+    await Promise.resolve();
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds a response stream even if its reader stalls", async () => {
+    const request = vi.fn<VercelRequest>(async () => new Response(new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode("{")); } })));
+    await expect(vercelClient(headers, request, teamId, new AbortController().signal, Date.now() + 20).probe()).rejects.toMatchObject({ status: 504 });
+  });
+});

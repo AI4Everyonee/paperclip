@@ -284,3 +284,15 @@ remaining operations before qualifying the whole capability.
 
 Gaps: Error reporting and human repair exist; no generic agent permission to reconnect
 accounts.
+
+Supabase and Vercel deployment methods (2026-10-22) reuse human-authorized setup
+and assigned run-scoped tools. Native Supabase calls use the saved project;
+native Vercel calls use the saved team and validate project ownership. Tokens
+remain in the selected personal/company vault grant and cannot be exported by
+`mintConnectionTokenForAgent`. Action policies, changed-schema quarantine,
+responsible-user access and immediate removal apply to deployment/configuration
+calls. Database/provider-fixture evidence lives in
+[deployment connector governance](../../server/src/__tests__/deployment-connections.test.ts).
+It does not establish authenticated provider deployment, OAuth consent or remote
+revocation. See [Supabase](../../doc/connections/SUPABASE.md) and
+[Vercel](../../doc/connections/vercel.md) for the remaining live-proof matrix.
