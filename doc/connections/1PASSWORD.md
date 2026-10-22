@@ -45,7 +45,7 @@ credential writer; provider revocation is managed in 1Password.
 | `onepassword_create_item` | Write | A new Login, Password, API Credentials, or Secure Note item |
 | `onepassword_update_item` | Write | An item with specified properties updated |
 | `onepassword_archive_item` | Destructive | An archived item |
-| `onepassword_delete_item` | Destructive | An item permanently deleted |
+| `onepassword_delete_item` | Destructive | A deleted item |
 
 Updates preserve the SDK's item version and omitted properties. Supplied `fields`
 and `tags` arrays replace their previous arrays. Supported editable field types

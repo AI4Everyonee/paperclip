@@ -36,6 +36,32 @@ describe("1Password provider contract", () => {
     expect(onePasswordArguments("onepassword_resolve_secret", { reference: `op://${vaultId}/${itemId}/password` })).toBeTruthy();
   });
 
+  it("sends reviewed create, archive and delete operations to the correct SDK boundary", async () => {
+    const params = { vaultId, title: "Disposable item", category: "SecureNote", notes: "Synthetic data",
+      fields: [{ id: "secret", title: "Test secret", fieldType: "Concealed", value: "synthetic-secret" }] };
+    const item = { ...params, id: itemId, version: 1 } as unknown as Item;
+    const create = vi.fn(async (_params: unknown) => item);
+    const archive = vi.fn(async (_vaultId: string, _itemId: string) => {}), remove = vi.fn(async (_vaultId: string, _itemId: string) => {});
+    const client = { items: { create, archive, delete: remove } } as unknown as Client;
+    const authenticate = vi.fn(async () => client);
+    expect(await executeOnePasswordSdk("ops_selected", "onepassword_create_item", params, authenticate)).toBe(item);
+    expect(create).toHaveBeenCalledExactlyOnceWith(params);
+    expect(await executeOnePasswordSdk("ops_selected", "onepassword_archive_item", { vaultId, itemId }, authenticate)).toEqual({ archived: true });
+    expect(archive).toHaveBeenCalledExactlyOnceWith(vaultId, itemId);
+    expect(remove).not.toHaveBeenCalled();
+    expect(await executeOnePasswordSdk("ops_selected", "onepassword_delete_item", { vaultId, itemId }, authenticate)).toEqual({ deleted: true });
+    expect(remove).toHaveBeenCalledExactlyOnceWith(vaultId, itemId);
+  });
+
+  it.each(["create", "archive", "delete"] as const)("propagates a rejected SDK %s without retrying or reporting success", async method => {
+    const denied = new Error("Provider denied the synthetic mutation");
+    const operation = vi.fn(async () => { throw denied; });
+    const client = { items: { [method]: operation } } as unknown as Client;
+    const args = method === "create" ? { vaultId, title: "Disposable", category: "SecureNote" } : { vaultId, itemId };
+    await expect(executeOnePasswordSdk("ops_selected", `onepassword_${method}_item`, args, async () => client)).rejects.toBe(denied);
+    expect(operation).toHaveBeenCalledOnce();
+  });
+
   it("terminates real SDK work on deadline without blocking unrelated work or leaking the token", async () => {
     const token = `ops_${Buffer.from(JSON.stringify({ signInAddress: "my.1password.com" })).toString("base64url")}`;
     const start = Date.now();

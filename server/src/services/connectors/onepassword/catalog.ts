@@ -28,7 +28,7 @@ const operations = [
   { name: "onepassword_create_item", description: "Create a Login, Password, API Credentials, or Secure Note item in an accessible vault.", risk: "write", schema: z.object({ ...itemChanges, vaultId: id, title: z.string().min(1).max(1024), category: z.enum(["Login", "Password", "ApiCredentials", "SecureNote"]) }).strict() },
   { name: "onepassword_update_item", description: "Update specified item properties. Supplied fields and tags replace their existing arrays; omitted properties are preserved.", risk: "write", schema: z.object({ ...target, ...itemChanges }).strict() },
   { name: "onepassword_archive_item", description: "Archive an item in an accessible vault.", risk: "destructive", schema: z.object(target).strict() },
-  { name: "onepassword_delete_item", description: "Permanently delete an item in an accessible vault.", risk: "destructive", schema: z.object(target).strict() },
+  { name: "onepassword_delete_item", description: "Delete an item from an accessible vault.", risk: "destructive", schema: z.object(target).strict() },
 ] as const;
 
 export const ONEPASSWORD_TOOLS = operations.map(({ name, description, risk, schema }) => ({
