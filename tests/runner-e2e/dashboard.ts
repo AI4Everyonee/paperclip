@@ -1,3 +1,4 @@
+import { campaignAttemptTimeLabel, campaignTimingScope, summarizeCampaignTiming } from "./campaign-timing.js";
 import { html, durationLabel, tokenLabel, llmCostLabel, usdLabel } from "./report-format.js";
 import { renderReportShell, reportNavigationStyles, reportShellScript } from "./report-navigation.js";
 import { reportBrowserScript } from "./report-browser.js";
@@ -390,10 +391,7 @@ export function renderRunnerE2EDashboard(input: RunnerDashboardInput) {
     !entry.valid && isIncompleteFirstTaskResult(entry.result, entry.errors),
   ).length;
   const failed = input.expected.length - passed - incomplete;
-  const totalDuration = selectedEntries.reduce(
-    (total, entry) => total + entry.result.durationMs,
-    0,
-  );
+  const timing = summarizeCampaignTiming(selectedEntries.map(entry => entry.result), input.campaign?.accounting);
   const screenshotCount = selectedEntries.reduce(
     (total, entry) => total + resolveScreenshots(entry).length,
     0,
@@ -839,7 +837,7 @@ export function renderRunnerE2EDashboard(input: RunnerDashboardInput) {
           <div class="metric"><strong>${passed}/${input.expected.length}</strong><span>Passed</span></div>
           <div class="metric"><strong>${failed}</strong><span>Failed</span></div>
           ${incomplete ? `<div class="metric"><strong>${incomplete}</strong><span>Incomplete</span></div>` : ""}
-          <div class="metric"><strong>${html(durationLabel(totalDuration))}</strong><span>Test time</span></div>
+          <div class="metric"><strong>${html(campaignAttemptTimeLabel(timing))}</strong><span>Summed attempt time</span></div>
         </div>
         <button class="gallery-launch" type="button" data-gallery-open ${screenshotCount === 0 ? "disabled" : ""}>${screenshotCount === 0 ? "Visual evidence · workflow artifact only" : `View gallery · ${screenshotCount}`}</button>
       </div>
@@ -857,6 +855,8 @@ export function renderRunnerE2EDashboard(input: RunnerDashboardInput) {
       <div class="billing-metric"><strong>${html(usdLabel(campaignBilling.estimatedRuntimeCostUsd))}</strong><span>Daytona list estimate</span></div>
       ${campaignBilling.judge ? `<div class="billing-metric"><strong>${html(usdLabel(campaignBilling.judge.estimatedCostUsd))}</strong><span>Judge estimate · ${campaignBilling.judge.attempts} attempts · ${campaignBilling.judge.attemptsWithUnknownUsage} unknown usage</span><small>${html(tokenLabel(campaignBilling.judge.inputTokens))} in / ${html(tokenLabel(campaignBilling.judge.outputTokens))} out · $${campaignBilling.judge.reservedCostUsd.toFixed(6)} reserved</small></div>` : ""}
       ${campaignBilling.assistant ? `<div class="billing-metric"><strong>${html(usdLabel(campaignBilling.assistant.estimatedCostUsd))}</strong><span>External assistant estimate · ${campaignBilling.assistant.requests} requests</span><small>${html(tokenLabel(campaignBilling.assistant.inputTokens + campaignBilling.assistant.cachedInputTokens))} in / ${html(tokenLabel(campaignBilling.assistant.outputTokens))} out</small></div>` : ""}
+      <div class="billing-metric"><strong>${html(durationLabel(timing.observedWindowMs))}</strong><span>Observed attempt window</span><small>${timing.retainedAttempts} retained attempts · ${timing.missingAttempts} missing attempts</small></div>
+      <p class="billing-note">${html(campaignTimingScope)}</p>
       <div class="billing-metric"><strong>${html(durationLabel(campaignBilling.agentRunDurationMs))}</strong><span>Agent execution time</span></div>
       <div class="billing-metric"><strong>${html(durationLabel(campaignBilling.leaseDurationMs))}</strong><span>Daytona lease time</span></div>
       <div class="billing-metric"><strong>${campaignBilling.llm.runsWithReportedCost}/${campaignBilling.llm.runCount}</strong><span>Runs provider-priced</span></div>

@@ -1,3 +1,4 @@
+import { campaignTimingText, summarizeCampaignTiming } from "./campaign-timing.js";
 import { stageDashboardBrandAssets } from "./report-assets.js";
 import { discoverReportCatalog } from "./report-catalog.js";
 import path from "node:path";
@@ -413,6 +414,7 @@ async function main() {
     `Provider-reported LLM cost: ${billingCoverageLabel(`$${billing.reportedLlmCostUsd.toFixed(6)}`, billing.llm.runsWithReportedCost, billing.llm.runCount, (billing.llm.runsWithPartialReportedCost ?? 0) > 0)}`,
     `Estimated LLM cost: ${billingCoverageLabel(`$${(billing.estimatedLlmCostUsd ?? 0).toFixed(6)}`, billing.llm.runsWithEstimatedCost ?? 0, billing.llm.runCount)}`,
     `Accounting: ${campaign.accounting!.attempts.length} retained attempts; ${campaign.accounting!.missingAttempts} missing attempts; ${campaign.accounting!.excludedArtifacts} out-of-scope artifacts excluded. Costs cover captured usage, not unobserved setup or external charges.`,
+    ...campaignTimingText(summarizeCampaignTiming(campaign.results, campaign.accounting)),
     ...(campaign.operations ? operationsReportText(campaign.operations) : []),
     "",
     `Feedback across retained attempts: ${feedback.complaints} complaints; ${feedback.suggestions} suggestions; ${feedback.incomplete} attempts with incomplete collection. Tool submissions: ${feedback.failedSubmissions} failed, ${feedback.unknownSubmissions} unresolved. Full bodies are in access-controlled snapshots/agent-feedback.json or snapshots/agent-feedback-recovered.json.`,

@@ -389,6 +389,8 @@ describe("runner E2E report aggregation", () => {
     );
     expect(dashboard).toContain("Runner Full-Stack E2E");
     expect(dashboard).toMatch(/\$0\.0250*<\/strong><span>LLM reported subtotal/);
+    expect(dashboard).toContain("<strong>2s</strong><span>Summed attempt time</span>");
+    expect(await readFile(path.join(output, "summary.md"), "utf8")).toContain("Summed attempt time: 2s; 2 retained attempts; 0 missing attempts.");
     expect(dashboard).toContain(executionId);
     expect(dashboard).toContain("case-passed");
     expect(dashboard).not.toContain(

@@ -80,6 +80,23 @@ or the separate [Runner authoring skill](../../.agents/skills/add-runner-eval/SK
 Update the existing scheduled selection and forecast only after qualification;
 adding a catalog entry alone must not enable recurring spending.
 
+## Reading campaign time
+
+The report's summed attempt time uses every retained accounting receipt,
+including failed retries. A missing attempt makes the total unknown; the report
+keeps the observed subtotal and missing count. The observed attempt window runs
+from the earliest retained start to the latest retained finish. Parallel attempts
+overlap in that window, while their individual durations add to the sum. Gaps
+between attempts remain in the window. Carried-forward evidence can span older
+runs, so this window is not the current workflow's duration.
+
+Agent execution and Daytona lease time remain separate measurements. Attempt
+durations include the setup and cleanup inside their recorded boundaries, but
+do not isolate those phases. CI queue/build time and provider-billed runtime
+need their own receipts. Do not infer them by subtracting summed agent time from
+the observed window. Refreshing a report computes these views from retained
+results without making provider calls or changing the original measurements.
+
 ## Costs outside the model journal
 
 Keep a separate cost component for each resource, with its currency, service,
