@@ -1,3 +1,4 @@
+import { createWorkerTiming } from "./worker-timing.js";
 import { FEEDBACK_PERSISTENCE_SUITE, gradeFeedbackPersistence } from "./feedback-persistence.js";
 import { EvalAttemptTrace, evalBraintrustConfig, EVAL_OBSERVABILITY_SECRET_NAMES } from "./braintrust.js";
 import { captureFollowupStopFailureApiState } from "./followup-stop-evidence.js";
@@ -600,6 +601,7 @@ for (const execution of executions) {
     }
     const startedAtMs = Date.now();
     const startedAt = new Date(startedAtMs).toISOString();
+    const workerTiming = await createWorkerTiming(path.join(snapshotsDir, "worker-timing.json"), { executionId: execution.id, attempt }, startedAtMs);
     const nonce = `${randomBytes(6).toString("hex")}-${attempt}`;
     const marker = execution.task.buildVisibleMarker(nonce);
     const title = execution.task.buildTitle(nonce);
@@ -956,6 +958,7 @@ for (const execution of executions) {
       await finishBudgetedEvalSetup({ executionId: execution.id, agentId: fixtures.agent.id,
         companyId: fixtures.company.id, deadlineAt: startedAtMs + deadlineMs, api,
         observe: observations => writeSanitizedJson(snapshotsDir, "budgeted-setup.json", { observations }, secrets) });
+      await workerTiming.enter("execution");
       trace?.phase("execution");
 
       if (["native-completion", NATIVE_INSTRUCTION_SUITE].includes(execution.suite.id)) {
@@ -3106,6 +3109,7 @@ for (const execution of executions) {
         }
       }
     } finally {
+      await workerTiming.enter("cleanup");
       trace?.phase("cleanup", Boolean(primaryError));
       await responseTiming?.stop();
       await reviewProvider?.close();
@@ -3166,6 +3170,7 @@ for (const execution of executions) {
             },
             assertions: beforeEnvironmentTeardownAssertions,
             teardown: async () => {
+              await workerTiming.enter("feedback");
               trace?.phase("feedback");
               try {
                 feedback = await collectAttemptFeedback({ api, companyId: fixtures!.company.id,
@@ -3182,6 +3187,7 @@ for (const execution of executions) {
                 feedback.invocationCollection = "unavailable";
                 networkDiagnostics.push({ feedbackCaptureError: "feedback_evidence_write_failed" });
               } finally {
+                await workerTiming.enter("cleanup");
                 trace?.phase("cleanup", !["complete", "not_started"].includes(feedback.collection));
                 await fixtures!.teardown();
               }
@@ -3251,6 +3257,7 @@ for (const execution of executions) {
         }
       }
 
+      await workerTiming.enter("finalization");
       if (execution.suite.id === FEEDBACK_PERSISTENCE_SUITE) {
         let evidence: unknown;
         try { evidence = JSON.parse(await readFile(path.join(snapshotsDir, "agent-feedback.json"), "utf8")); } catch { evidence = undefined; }
@@ -3316,6 +3323,7 @@ for (const execution of executions) {
         startedAt,
         finishedAt: new Date(finishedAtMs).toISOString(),
         durationMs: finishedAtMs - startedAtMs,
+        workerTiming: await workerTiming.finish(finishedAtMs),
         usage:
           selectedRuns.length === 1
             ? (selectedRuns[0]?.usageJson ?? null)

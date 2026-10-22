@@ -51,6 +51,7 @@ function receipt(result: RunnerE2EResult): RunnerE2EAttemptReceipt {
     startedAt: result.startedAt,
     finishedAt: result.finishedAt,
     durationMs: result.durationMs,
+    ...(result.workerTiming ? { workerTiming: result.workerTiming } : {}),
     status: result.status,
     cleanup: result.cleanup,
     billing: summarizeExecutionBilling(result),
@@ -73,6 +74,11 @@ export function buildCampaignAccounting(input: {
         JSON.stringify(previous.billing) !== JSON.stringify(next.billing)) {
       throw new Error(`Conflicting accounting receipts for ${result.executionId} attempt ${result.attempt}`);
     }
+    if (previous && previous.finishedAt === next.finishedAt && previous.workerTiming && next.workerTiming &&
+        JSON.stringify(previous.workerTiming) !== JSON.stringify(next.workerTiming)) {
+      throw new Error(`Conflicting timing receipts for ${result.executionId} attempt ${result.attempt}`);
+    }
+    if (previous && previous.finishedAt === next.finishedAt && previous.workerTiming && !next.workerTiming) next.workerTiming = previous.workerTiming;
     if (!previous || Date.parse(next.finishedAt) >= Date.parse(previous.finishedAt)) receipts.set(next.id, next);
   }
   const attempts = [...receipts.values()].sort((a, b) =>

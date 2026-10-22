@@ -91,10 +91,22 @@ between attempts remain in the window. Carried-forward evidence can span older
 runs, so this window is not the current workflow's duration.
 
 Agent execution and Daytona lease time remain separate measurements. Attempt
-durations include the setup and cleanup inside their recorded boundaries, but
-do not isolate those phases. CI queue/build time and provider-billed runtime
-need their own receipts. Do not infer them by subtracting summed agent time from
-the observed window. Refreshing a report computes these views from retained
+durations include the setup and cleanup inside their recorded boundaries.
+New browser-worker results retain a separate phase receipt for fixture setup,
+execution, feedback capture, cleanup and worker finalization. Repeated cleanup
+segments add together. Atomic checkpoints preserve completed phases if the
+worker is interrupted; the active phase has no inferred end time. Parent
+recovery checks identity, interval bounds and file size before retaining that
+partial receipt. Missing, malformed or unavailable receipts keep phase totals
+unknown, while closed segments remain visible as observed subtotals.
+
+These phases start inside the test callback, after browser/server startup, and
+end before result publication. Parent teardown/finalization, CI queue/build time
+and provider-billed runtime need their own receipts. Historical results and
+non-browser launchers without a worker receipt remain explicitly unmeasured.
+Test details show each selected attempt's receipt status and raw timing metadata.
+Do not infer missing measurements by subtracting summed agent time from the
+observed window. Refreshing a report computes these views from retained
 results without making provider calls or changing the original measurements.
 
 ## Costs outside the model journal

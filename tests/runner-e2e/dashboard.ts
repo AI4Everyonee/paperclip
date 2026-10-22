@@ -1,4 +1,4 @@
-import { campaignAttemptTimeLabel, campaignTimingScope, summarizeCampaignTiming } from "./campaign-timing.js";
+import { campaignAttemptTimeLabel, campaignTimingScope, renderWorkerPhaseTiming, summarizeCampaignTiming, summarizeWorkerPhaseTiming } from "./campaign-timing.js";
 import { html, durationLabel, tokenLabel, llmCostLabel, usdLabel } from "./report-format.js";
 import { renderReportShell, reportNavigationStyles, reportShellScript } from "./report-navigation.js";
 import { reportBrowserScript } from "./report-browser.js";
@@ -304,6 +304,7 @@ function renderCase(
       <summary><span>Test details</span><span class="case-detail-summary">${matcherResults.length ? `${passedMatchers}/${matcherResults.length} checks${notReached ? ` · ${notReached} not reached` : ""}` : "No checks recorded"}${entry ? ` · ${html(durationLabel(entry.result.durationMs))}` : ""}</span></summary>
     ${passed ? outcome : ""}
     ${billingStrip}
+    ${entry ? `<p class="detail">Worker phase timing: ${entry.result.workerTiming ? html(entry.result.workerTiming.status === "unavailable" ? `unavailable (${entry.result.workerTiming.reason})` : entry.result.workerTiming.status) : "not captured"}. ${entry.result.workerTiming?.status === "partial" ? "Only completed phases have observed durations." : ""}</p>` : ""}
     ${entry?.result.feedback ? `<p class="detail">Feedback: ${entry.result.feedback.complaints} complaints · ${entry.result.feedback.suggestions} suggestions · ${entry.result.feedback.review.length} distinct items; see campaign feedback review. Saved-feedback collection: ${html(entry.result.feedback.collection)}; invocation coverage: ${html(entry.result.feedback.invocationCollection)}. Tool receipts: ${entry.result.feedback.invocations.failed} failed · ${entry.result.feedback.invocations.unknown} unresolved. Full bodies: access-controlled snapshots/agent-feedback.json or snapshots/agent-feedback-recovered.json.</p>` : entry ? `<p class="detail">Feedback was not captured for this attempt.</p>` : ""}
     ${entry?.result.tracing ? `<p class="detail">Braintrust worker export: ${html(entry.result.tracing.status)}; native configuration: ${html(entry.result.tracing.nativeConfiguration)}. ${entry.result.tracing.finalization ? `Supervisor outcome: ${html(entry.result.tracing.finalization.outcome)}; finalization export: ${html(entry.result.tracing.finalization.status)}.` : "Supervisor finalization was not captured."} Trace ${html(entry.result.tracing.traceId)} in project ${html(entry.result.tracing.projectId)}. Indexing and native-span correlation require independent verification.</p>` : ""}
     ${links}
@@ -329,7 +330,7 @@ function renderCase(
     ${latencyRows ? `<div class="matcher-wrap"><table class="matchers"><thead><tr><th>Event</th><th>Timing verdict</th><th>Possible latency</th><th>Target</th><th>Resolution</th></tr></thead><tbody>${latencyRows}</tbody></table></div>` : ""}
     ${startupReuseRows ? `<div class="matcher-wrap"><table class="matchers"><caption>Startup reuse evidence</caption><thead><tr><th>Run</th><th>Warmth</th><th>Environment/lease</th><th>Workspace</th><th>Runner</th><th>Provider process</th><th>Provider session</th><th>Provider launches</th></tr></thead><tbody>${startupReuseRows}</tbody></table></div>` : ""}
     ${matcherRows ? `<div class="matcher-wrap"><table class="matchers"><thead><tr><th>Result</th><th>Matcher</th><th>Expectation</th><th>Detail</th></tr></thead><tbody>${matcherRows}</tbody></table></div>` : `<p class="detail">No matcher result was recorded.</p>`}
-    ${entry ? `<details class="usage"><summary>Usage and billing metadata</summary><pre>${html(JSON.stringify({ billing, rawUsage: entry.result.usage ?? null }, null, 2))}</pre></details>` : ""}
+    ${entry ? `<details class="usage"><summary>Usage, billing and timing metadata</summary><pre>${html(JSON.stringify({ billing, rawUsage: entry.result.usage ?? null, workerTiming: entry.result.workerTiming ?? null }, null, 2))}</pre></details>` : ""}
     </details>
   </article>`;
 }
@@ -861,7 +862,7 @@ export function renderRunnerE2EDashboard(input: RunnerDashboardInput) {
       <div class="billing-metric"><strong>${html(durationLabel(campaignBilling.leaseDurationMs))}</strong><span>Daytona lease time</span></div>
       <div class="billing-metric"><strong>${campaignBilling.llm.runsWithReportedCost}/${campaignBilling.llm.runCount}</strong><span>Runs provider-priced</span></div>
       <p class="billing-note">Campaign costs include retained attempts, including failed retries. Result cards show the selected attempt. Provider-reported amounts and model estimates are separate; unpriced or unavailable runs are excluded, never counted as free. Coverage describes captured usage; unobserved setup, subscriptions, tools, CI and storage require additional accounting. Daytona runtime is a public-list-price estimate from captured lease time and pinned resources, before credits, discounts, storage allowance, or invoice adjustments. Local execution has no external runtime meter.</p>
-    </section>${input.campaign?.operations ? renderEvalOperationsReport(input.campaign.operations) : ""}${input.campaign ? renderCampaignFeedbackReview(input.campaign) + renderBraintrustExperiment(input.campaign) : ""}</details>
+    </section>${renderWorkerPhaseTiming(summarizeWorkerPhaseTiming(selectedEntries.map(entry => entry.result), input.campaign?.accounting))}${input.campaign?.operations ? renderEvalOperationsReport(input.campaign.operations) : ""}${input.campaign ? renderCampaignFeedbackReview(input.campaign) + renderBraintrustExperiment(input.campaign) : ""}</details>
     </section>
     <div class="results-heading" id="results"><h2 data-results-title>All results</h2><span data-results-description></span></div>
     <div data-feature-coverage>${renderJourneyFeatureCoverage(catalog, entryById)}</div>

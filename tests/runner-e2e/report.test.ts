@@ -1,3 +1,4 @@
+import { createWorkerTiming } from "./worker-timing.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -32,6 +33,12 @@ describe("runner E2E report aggregation", () => {
       caseId: "message-marker", provider: "codex", model: "fixture-model", runtimeMode: "native",
       startedAt: "2026-10-20T00:00:00Z", finishedAt: "2026-10-20T00:00:01Z", durationMs: 1000, cleanup: "passed",
     };
+    const phaseStart = Date.parse(result.startedAt);
+    const timing = await createWorkerTiming(path.join(directory, "worker-timing.json"), result, phaseStart);
+    await timing.enter("execution", phaseStart + 200);
+    await timing.enter("cleanup", phaseStart + 800);
+    await timing.enter("finalization", phaseStart + 900);
+    result.workerTiming = await timing.finish(phaseStart + 1000);
     const original = JSON.stringify(result);
     await writeFile(path.join(directory, "result.json"), original);
     await writeFile(path.join(directory, "final-state.png"), "fake-png");
@@ -45,6 +52,10 @@ describe("runner E2E report aggregation", () => {
     const normalized = JSON.parse(await readFile(path.join(output, "normalized-results.json"), "utf8"));
     expect(normalized).toMatchObject({ passed: 1, failed: 0, operations: { status: "unavailable" } });
     expect(normalized.results[0]).toMatchObject({ executionId, status: "passed" });
+    expect(normalized.accounting.attempts[0].workerTiming).toEqual(result.workerTiming);
+    expect(await readFile(path.join(output, "summary.md"), "utf8")).toContain("Worker setup time: 200ms.");
+    expect(await readFile(path.join(output, "index.html"), "utf8")).toContain("<strong>200ms</strong><span>Worker setup time</span>");
+    expect(await readFile(path.join(output, "index.html"), "utf8")).toContain("Worker phase timing: complete.");
     expect(normalized.billing.agentRunDurationMs).toBeNull();
     expect(await readFile(path.join(output, "index.html"), "utf8"))
       .toContain("<strong>Unknown</strong><span>Agent execution time</span>");
@@ -390,6 +401,7 @@ describe("runner E2E report aggregation", () => {
     expect(dashboard).toContain("Runner Full-Stack E2E");
     expect(dashboard).toMatch(/\$0\.0250*<\/strong><span>LLM reported subtotal/);
     expect(dashboard).toContain("<strong>2s</strong><span>Summed attempt time</span>");
+    expect(dashboard).toContain("Carried-forward evidence can span older runs");
     expect(await readFile(path.join(output, "summary.md"), "utf8")).toContain("Summed attempt time: 2s; 2 retained attempts; 0 missing attempts.");
     expect(dashboard).toContain(executionId);
     expect(dashboard).toContain("case-passed");

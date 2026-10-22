@@ -1,3 +1,4 @@
+import { recoverWorkerTiming } from "./worker-timing.js";
 import { openEvalOperations, type EvalOperations } from "./operations.js";
 import { readRecoveredFeedback } from "./feedback-recovery.js";
 import { readInterruptedAttemptTrace } from "./trace-recovery.js";
@@ -673,6 +674,8 @@ async function runAttempt(input: {
           processFailureClass,
         );
         const result = await readResult(resultPath, fallback);
+        if (!result.workerTiming) result.workerTiming = await recoverWorkerTiming(path.join(path.dirname(resultPath), "snapshots", "worker-timing.json"),
+          { executionId: candidate.id, attempt, startedAt: result.startedAt, finishedAt: result.finishedAt });
         if (result === fallback) {
           result.feedback = await readRecoveredFeedback(path.dirname(resultPath), {
             campaignId: accountingCampaignId, attemptId: accountingAttemptId, executionId: candidate.id,

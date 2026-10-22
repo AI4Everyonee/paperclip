@@ -341,6 +341,7 @@ export interface RunnerE2EResult {
   startedAt: string;
   finishedAt: string;
   durationMs: number;
+  workerTiming?: import("./worker-timing.js").WorkerTiming;
   usage?: Record<string, unknown> | null;
   runtimeUsage?: RunnerE2ERuntimeUsage;
   billing?: RunnerE2EBillingSummary;
@@ -414,6 +415,7 @@ export interface RunnerE2EAttemptReceipt {
   startedAt: string;
   finishedAt: string;
   durationMs: number;
+  workerTiming?: import("./worker-timing.js").WorkerTiming;
   status: RunnerE2EResult["status"];
   cleanup: RunnerE2EResult["cleanup"];
   billing: RunnerE2EBillingSummary;

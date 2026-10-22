@@ -1,3 +1,4 @@
+import { validateWorkerTiming } from "./worker-timing.js";
 import { connectionCheckpoints, connectionEvidencePasses, connectionRunSignals } from "./connection-evidence.js";
 import { STARTUP_REUSE_LAYERS, STARTUP_REUSE_REASONS } from "../../packages/adapter-utils/src/startup-reuse.js";
 import type { RunnerE2ECampaignAccounting, RunnerE2EResult } from "./types.js";
@@ -184,6 +185,11 @@ export function validateCampaignAccounting(value: RunnerE2ECampaignAccounting) {
     })),
   })(value, "accounting");
   if (new Set(value.attempts.map(attempt => attempt.id)).size !== value.attempts.length) invalid("accounting.attempts duplicate id");
+  for (const attempt of value.attempts) {
+    if (attempt.workerTiming !== undefined) {
+      try { validateWorkerTiming(attempt.workerTiming, attempt); } catch { invalid("accounting.attempts.workerTiming"); }
+    }
+  }
 }
 const matcher: Rule = (value, at) => {
   object(value, at);
@@ -299,6 +305,7 @@ const fields = {
   startedAt: date,
   finishedAt: date,
   durationMs: number,
+  workerTiming: optional(object),
   // Provider usage is intentionally opaque. Billing reads only finite numbers;
   // the dashboard shows opaque diagnostics through escaped JSON.
   usage: optional(nullable(object)),
@@ -363,5 +370,8 @@ export function validateRetainedRunnerResult(
 ): asserts value is RunnerE2EResult {
   result(value, "result");
   const checked = value as RunnerE2EResult;
+  if (checked.workerTiming !== undefined) {
+    try { validateWorkerTiming(checked.workerTiming, checked); } catch { invalid("result.workerTiming"); }
+  }
   if (checked.suiteId === "provider-connections" && checked.status === "passed" && (!checked.providerConnection || !connectionEvidencePasses(checked.providerConnection))) invalid("result.providerConnection");
 }
