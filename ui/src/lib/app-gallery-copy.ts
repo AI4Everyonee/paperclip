@@ -179,6 +179,7 @@ export function credentialFieldLabel(
   rawLabel: string,
   fieldCount: number,
 ): string {
+  if (/^[A-Z][A-Z0-9]*_[A-Z0-9_]+$/.test(rawLabel)) return rawLabel;
   if (fieldCount <= 1) return `Your ${appName} key`;
   const cleaned = sanitizeProsumerCopy(rawLabel);
   return cleaned || `Your ${appName} key`;

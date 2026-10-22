@@ -2897,6 +2897,25 @@
       "reviewedAt": "2026-10-15",
       "liveProof": "not-run",
       "keyPermissions": "Create an API token in the Unikraft Cloud console. A token acts for its whole organization in every metro, including running sandbox commands and deleting resources. Unikraft does not offer narrower token permissions, so choose trusted agents and use action permissions to limit what they can do."
+    },
+    {
+      "app": "1password",
+      "method": "service-account",
+      "auth": "api_key",
+      "policy": "explicit",
+      "requestedScopes": [],
+      "capability": "write",
+      "supportedActions": "List authorized vaults and items; read items and op:// references; create, update, archive and delete items. No vault administration, sharing, file export, desktop authorization or arbitrary commands.",
+      "keyPermissions": "Create a service account with access only to the required vaults. Grant Read Items and Write Items for reading and managing items. Service-account vault access and permissions are fixed at creation; create a new token and reconnect to change them. Read-only tokens can connect, but writes will be denied by 1Password.",
+      "providerRestrictions": "Requires a 1Password subscription and permission to create service accounts. Built-in Personal, Private, Employee and default Shared vaults cannot be granted. The official SDK handles regional accounts. Token rotation requires reconnecting.",
+      "evidence": [
+        "https://www.1password.dev/service-accounts/get-started",
+        "https://www.1password.dev/sdks/manage-items",
+        "https://github.com/1Password/onepassword-sdk-js"
+      ],
+      "reviewedAt": "2026-10-22",
+      "liveProof": "read-only-verified",
+      "evidenceLimit": "2026-10-22: connect, eight-tool discovery, safe read via run-scoped gateway, catalog refresh, reconnect preserving identity, removal, retained-session denial and credential absence passed. The supplied account denied synthetic item creation; live write actions remain unqualified pending Write Items permission."
     }
   ]
 }
