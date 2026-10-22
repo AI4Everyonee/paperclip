@@ -1805,7 +1805,12 @@ export function toolAccessService(
             .limit(1)
         : [undefined];
     let retainedConnection = requestedResumeConnection ?? recoveredConnection;
-    if (retainedConnection && method && retainedConnection.transport !== method.transport) {
+    const transport = method?.transport ?? "mcp_remote";
+    const applicationType = transport === "rest_api" ? "rest_api"
+      : transport === "mcp_remote" ? "mcp_http"
+        : transport === "local_stdio" ? "mcp_stdio" : null;
+    if ((retainedConnection && retainedConnection.transport !== transport)
+      || (existingApplication && applicationType && existingApplication.type !== applicationType)) {
       if (requestedResumeConnection || input.applicationId) {
         throw conflict("Create a separate app connection to change its connection method transport.", {
           code: "connection_transport_change_not_supported",
@@ -1946,7 +1951,6 @@ export function toolAccessService(
           "Dedicated GitHub identity requires an agent in this company",
         );
     }
-    const transport = method?.transport ?? "mcp_remote";
     const credentialSource: ToolConnectionCredentialSource =
       input.credentialSource ?? "paperclip_vault";
     if (

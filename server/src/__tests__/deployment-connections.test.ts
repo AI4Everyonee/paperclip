@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
@@ -71,7 +71,15 @@ const support = external ? { supported: true } : await getEmbeddedPostgresTestSu
   beforeAll(async () => {
     if (external) {
       const url = new URL(external);
-      url.pathname = `/deployment_connectors_${randomUUID().replaceAll("-", "")}`;
+      if (process.env.PAPERCLIP_TEST_REUSE_DEPLOYMENT_DATABASE === "1") {
+        // Only an explicitly named synthetic fixture database may be reused.
+        // Each test still creates its own company and connection identities.
+        if (!/^\/deployment_connectors_[a-f0-9]{32}$/.test(url.pathname)) {
+          throw new Error("Reuse requires an isolated deployment_connectors fixture database");
+        }
+      } else {
+        url.pathname = `/deployment_connectors_${randomUUID().replaceAll("-", "")}`;
+      }
       await ensurePostgresDatabase(external, url.pathname.slice(1));
       await applyPendingMigrations(url.toString());
       db = createDb(url.toString());
@@ -366,6 +374,59 @@ const support = external ? { supported: true } : await getEmbeddedPostgresTestSu
       for (const secret of secrets) expect(visible).not.toContain(secret);
     });
 
+    it("requires reconciliation before retrying an ambiguous completed legacy secret write", async () => {
+      const secrets = ["synthetic-legacy-secret-first-value", "synthetic-legacy-secret-second-value"];
+      const f = await fixture(provider, false, secrets);
+      const configure = provider.slug === "supabase" ? provider.configureSecret : provider.configure;
+      const tool = f.tools.find(candidate => candidate.upstreamToolName === configure.name)!;
+      const write = (secretValue: string, idempotencyKey?: string) => f.gateway.executeTool({
+        sessionToken: f.session.token, tool: tool.name,
+        parameters: { ...configure.parameters, secretValue }, idempotencyKey,
+      });
+      const first = await write(secrets[0]);
+      expect(first.status).toBe("completed");
+      const [saved] = await db.select().from(toolInvocations).where(eq(toolInvocations.id, first.invocationId));
+      const argumentsHash = saved.argumentsSummary!.sha256;
+      const legacyScope = {
+        companyId: saved.companyId, runId: saved.runId, issueId: saved.issueId,
+        applicationId: saved.applicationId, connectionId: saved.connectionId,
+        catalogEntryId: saved.catalogEntryId, toolName: saved.toolName, argumentsHash,
+      };
+      // This reproduces the persisted default key used before full argument
+      // identity. Its redacted summary cannot prove which secret was written.
+      const canonicalScope = Object.fromEntries(Object.keys(legacyScope).sort().map(key => [key, legacyScope[key as keyof typeof legacyScope]]));
+      const legacyKey = `side_effect:${createHash("sha256").update(JSON.stringify(canonicalScope)).digest("hex")}`;
+      await db.update(toolInvocations).set({ argumentsHash, idempotencyKey: legacyKey }).where(eq(toolInvocations.id, first.invocationId));
+
+      f.request.mockClear();
+      for (const secretValue of secrets) {
+        await expect(write(secretValue)).rejects.toMatchObject({
+          status: 409,
+          reasonCode: "legacy_tool_idempotency_unverifiable",
+          details: { reasonCode: "legacy_tool_idempotency_unverifiable", invocationId: first.invocationId },
+        });
+      }
+      expect(f.request).not.toHaveBeenCalled();
+
+      const explicitKey = randomUUID();
+      const second = await write(secrets[1], explicitKey);
+      const replay = await write(secrets[1], explicitKey);
+      expect(second).toMatchObject({ status: "completed" });
+      expect(second.invocationId).not.toBe(first.invocationId);
+      expect(replay).toMatchObject({ status: "replayed", invocationId: second.invocationId });
+      const writes = f.request.mock.calls.filter(([, init]) => init.method === "POST");
+      expect(writes).toHaveLength(1);
+      const body = JSON.parse(String(writes[0][1].body));
+      expect(provider.slug === "supabase" ? body[0].value : body.value).toBe(secrets[1]);
+      const invocations = await db.select().from(toolInvocations).where(eq(toolInvocations.companyId, f.company.id));
+      expect(invocations).toHaveLength(2);
+      const audits = await db.select().from(toolAccessAuditEvents).where(eq(toolAccessAuditEvents.companyId, f.company.id));
+      const requests = await db.select().from(toolActionRequests).where(eq(toolActionRequests.companyId, f.company.id));
+      expect(requests).toHaveLength(0);
+      const visible = JSON.stringify({ first, second, replay, invocations, audits });
+      for (const secret of secrets) expect(visible).not.toContain(secret);
+    });
+
     it("keeps another company and another responsible user outside a personal connection", async () => {
       const f = await fixture(provider, true);
       const foreign = await createCompany();
@@ -417,6 +478,40 @@ const support = external ? { supported: true } : await getEmbeddedPostgresTestSu
       await expect(f.call(provider.read)).rejects.toThrow();
       expect(f.request).not.toHaveBeenCalled();
     });
+  });
+
+  it.each(["mcp_remote", "rest_api"] as const)("rejects a transport switch on an active Supabase application before saving credentials (from %s)", async transport => {
+    const f = await fixture(providers[0]);
+    const applicationType = transport === "mcp_remote" ? "mcp_http" : "rest_api";
+    if (transport === "mcp_remote") {
+      await db.update(toolConnections).set({ transport, config: {
+        ...f.connected.connection.config, url: "https://mcp.supabase.com/mcp", connectionMethodKey: "mcp-api-key",
+      } }).where(eq(toolConnections.id, f.connected.connectionId));
+      await db.update(toolApplications).set({ type: applicationType }).where(eq(toolApplications.id, f.connected.application.id));
+    }
+    const [application] = await db.select().from(toolApplications).where(eq(toolApplications.id, f.connected.application.id));
+    const connectionsBefore = await db.select().from(toolConnections).where(eq(toolConnections.companyId, f.company.id));
+    const secretsBefore = await db.select().from(companySecrets).where(eq(companySecrets.companyId, f.company.id));
+    expect(application).toMatchObject({ status: "active", type: applicationType });
+    expect(connectionsBefore).toHaveLength(1);
+    expect(connectionsBefore[0]).toMatchObject({ status: "active", transport });
+    expect(secretsBefore).toHaveLength(1);
+    f.request.mockClear();
+
+    await expect(f.service.connectGalleryApp(f.company.id, {
+      galleryKey: "supabase", applicationId: application.id,
+      connectionMethodKey: transport === "mcp_remote" ? "management-api" : "mcp-api-key",
+      configValues: { projectRef },
+      credentialValues: { "credentials.authorization": "synthetic-rejected-transport-switch-token" },
+    }, actor)).rejects.toMatchObject({
+      status: 409, details: { code: "connection_transport_change_not_supported" },
+    });
+
+    expect(f.request).not.toHaveBeenCalled();
+    const [applicationAfter] = await db.select().from(toolApplications).where(eq(toolApplications.id, application.id));
+    expect(applicationAfter).toEqual(application);
+    expect(await db.select().from(toolConnections).where(eq(toolConnections.companyId, f.company.id))).toEqual(connectionsBefore);
+    expect(await db.select().from(companySecrets).where(eq(companySecrets.companyId, f.company.id))).toEqual(secretsBefore);
   });
 
   it("keeps an archived Supabase MCP identity separate when connecting Management API", async () => {
