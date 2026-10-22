@@ -1,6 +1,7 @@
 import type { PromptInjectionModelOutcome, PromptInjectionDetectorMetadata } from "@paperclipai/shared";
 import { createCipheriv, createDecipheriv, createHash, createHmac, hkdfSync, randomBytes, timingSafeEqual } from "node:crypto";
 import { redactEventPayload, redactSensitiveText, REDACTED_EVENT_VALUE } from "../redaction.js";
+import { deriveLocalEncryptedInstanceSecret, type LocalEncryptedKeyEnv } from "../secrets/local-encrypted-provider.js";
 
 export class ToolContentValidationError extends Error {
   constructor(
@@ -20,7 +21,7 @@ const PROMPT_INJECTION_PATTERNS: Array<{ code: string; re: RegExp }> = [
   { code: "secret_exfiltration", re: /\b(exfiltrate|leak|steal|send)\b.{0,40}\b(secret|token|api[-_ ]?key|credential)s?\b/i },
 ];
 
-type ToolActionSigningSecretEnv = Partial<
+type ToolActionSigningSecretEnv = LocalEncryptedKeyEnv & Partial<
   Record<"PAPERCLIP_TOOL_ACTION_SIGNING_SECRET" | "PAPERCLIP_AGENT_JWT_SECRET" | "BETTER_AUTH_SECRET", string | undefined>
 >;
 
@@ -47,10 +48,11 @@ function scanPromptInjection(value: unknown): string[] {
 }
 
 export class ToolActionSigningSecretMissingError extends Error {
-  constructor() {
+  constructor(cause?: unknown) {
     super(
-      "PAPERCLIP_TOOL_ACTION_SIGNING_SECRET is not configured; signed tool action approvals cannot be issued. " +
-        "Set PAPERCLIP_TOOL_ACTION_SIGNING_SECRET in this instance's environment (worktrees inherit it from .paperclip/.env).",
+      "The tool action signing key could not be loaded. Restore this instance's secrets master key " +
+        "or configure PAPERCLIP_TOOL_ACTION_SIGNING_SECRET; existing approvals require their original key.",
+      { cause },
     );
     this.name = "ToolActionSigningSecretMissingError";
   }
@@ -63,10 +65,15 @@ export const TOOL_ACTION_REQUEST_SIGNING_GRACE_MS = 2 * 60 * 1000;
 
 export function resolveToolActionSigningSecret(env: ToolActionSigningSecretEnv = process.env as ToolActionSigningSecretEnv) {
   const secret = env.PAPERCLIP_TOOL_ACTION_SIGNING_SECRET?.trim();
-  if (!secret) {
-    throw new ToolActionSigningSecretMissingError();
+  if (secret) return secret;
+  try {
+    // Existing deployments already persist this master key with their instance
+    // data. Reuse its atomic publication and configured path, with a separate
+    // derived key for tool actions; never fall back to auth keys or process RNG.
+    return deriveLocalEncryptedInstanceSecret("tool-action-signing", env);
+  } catch (cause) {
+    throw new ToolActionSigningSecretMissingError(cause);
   }
-  return secret;
 }
 
 function signingSecret(explicitSecret?: string) {

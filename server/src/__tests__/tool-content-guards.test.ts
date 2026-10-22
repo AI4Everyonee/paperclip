@@ -1,5 +1,13 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createHash, createHmac } from "node:crypto";
+import { execFile } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
+import { deriveLocalEncryptedInstanceSecret } from "../secrets/local-encrypted-provider.js";
 import {
   canonicalToolArguments,
   readSignedToolArguments,
@@ -16,6 +24,16 @@ import {
 
 describe("tool content guards", () => {
   const signingSecret = "test-tool-action-signing-secret";
+  const temporaryDirectories: string[] = [];
+  function isolatedKeyFile() {
+    const directory = mkdtempSync(join(tmpdir(), "tool-signing-key-"));
+    temporaryDirectories.push(directory);
+    return join(directory, "master.key");
+  }
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
+  });
 
   it("keeps secret replacements distinct while redacted summaries stay identical", () => {
     const first = { key: "SERVICE_PASSWORD", secretValue: "1234" };
@@ -37,13 +55,18 @@ describe("tool content guards", () => {
     expect(toolRequestIdentityHash([...entries, "first"])).not.toBe(toolRequestIdentityHash([...entries, "second"]));
   });
 
-  it("uses explicit or configured keys for sensitive request identities and never falls back to an unkeyed digest", () => {
+  it("uses explicit, configured, or durable derived keys for sensitive identities, never an unkeyed digest", () => {
     vi.stubEnv("PAPERCLIP_TOOL_ACTION_SIGNING_SECRET", "");
+    vi.stubEnv("PAPERCLIP_SECRETS_MASTER_KEY", "");
+    vi.stubEnv("PAPERCLIP_SECRETS_MASTER_KEY_FILE", isolatedKeyFile());
     try {
-      expect(() => toolRequestIdentityHash({ secretValue: "1234" })).toThrow(ToolActionSigningSecretMissingError);
-      expect(() => toolRequestIdentityHash([{ password: "1234" }])).toThrow(ToolActionSigningSecretMissingError);
+      const derived = toolRequestIdentityHash({ secretValue: "1234" });
+      expect(derived).toBe(toolRequestIdentityHash({ secretValue: "1234" }));
+      expect(derived).not.toBe(createHash("sha256").update(canonicalToolArguments({ secretValue: "1234" })).digest("hex"));
+      expect(toolRequestIdentityHash([{ password: "1234" }])).toMatch(/^[a-f0-9]{64}$/);
       const explicit = toolRequestIdentityHash({ secretValue: "1234" }, signingSecret);
       vi.stubEnv("PAPERCLIP_TOOL_ACTION_SIGNING_SECRET", signingSecret);
+      vi.stubEnv("PAPERCLIP_SECRETS_MASTER_KEY", "invalid-master-key");
       expect(toolRequestIdentityHash({ secretValue: "1234" })).toBe(explicit);
       expect(toolRequestIdentityHash({ secretValue: "1234" }, "other-key")).not.toBe(explicit);
     } finally { vi.unstubAllEnvs(); }
@@ -84,17 +107,55 @@ describe("tool content guards", () => {
     })).toEqual({ body: "hello", noteId: "n1" });
   });
 
-  it("requires a dedicated tool action signing secret", () => {
-    expect(() =>
-      resolveToolActionSigningSecret({
-        PAPERCLIP_AGENT_JWT_SECRET: "agent-jwt-secret",
-        BETTER_AUTH_SECRET: "auth-secret",
-      }),
-    ).toThrow(ToolActionSigningSecretMissingError);
-    expect(() =>
-      resolveToolActionSigningSecret({}),
-    ).toThrow("PAPERCLIP_TOOL_ACTION_SIGNING_SECRET");
+  it("derives a separate instance key independently of authentication secrets and honors explicit configuration", () => {
+    const keyFile = isolatedKeyFile();
+    const env = { PAPERCLIP_SECRETS_MASTER_KEY_FILE: keyFile,
+      PAPERCLIP_AGENT_JWT_SECRET: "agent-jwt-secret", BETTER_AUTH_SECRET: "auth-secret" };
+    const derived = resolveToolActionSigningSecret(env);
+    expect(derived).toBe(resolveToolActionSigningSecret({ ...env, PAPERCLIP_AGENT_JWT_SECRET: "rotated-jwt", BETTER_AUTH_SECRET: "rotated-auth" }));
+    expect(derived).not.toBe(readFileSync(keyFile, "utf8").trim());
+    expect(derived).not.toBe(deriveLocalEncryptedInstanceSecret("another-purpose", env));
+    expect(resolveToolActionSigningSecret({ ...env, PAPERCLIP_TOOL_ACTION_SIGNING_SECRET: ` ${signingSecret} `,
+      PAPERCLIP_SECRETS_MASTER_KEY: "invalid-master-key" })).toBe(signingSecret);
+    const masterKey = Buffer.alloc(32, 7).toString("base64");
+    expect(resolveToolActionSigningSecret({ ...env, PAPERCLIP_SECRETS_MASTER_KEY: masterKey })).toBe(
+      resolveToolActionSigningSecret({ PAPERCLIP_SECRETS_MASTER_KEY: masterKey }));
+    expect(resolveToolActionSigningSecret({ ...env, PAPERCLIP_SECRETS_MASTER_KEY: masterKey })).not.toBe(derived);
   });
+
+  it("fails closed without replacing invalid persisted master-key material", () => {
+    const keyFile = isolatedKeyFile();
+    writeFileSync(keyFile, "invalid-master-key");
+    expect(() => resolveToolActionSigningSecret({ PAPERCLIP_SECRETS_MASTER_KEY_FILE: keyFile }))
+      .toThrow(ToolActionSigningSecretMissingError);
+    expect(readFileSync(keyFile, "utf8")).toBe("invalid-master-key");
+    expect(() => resolveToolActionSigningSecret({ PAPERCLIP_SECRETS_MASTER_KEY: "invalid-master-key" }))
+      .toThrow(ToolActionSigningSecretMissingError);
+  });
+
+  it("shares a durable derived signing key across competing processes and a later restart", async () => {
+    const keyFile = isolatedKeyFile();
+    const modulePath = fileURLToPath(new URL("../services/tool-content-guards.ts", import.meta.url));
+    const loader = createRequire(import.meta.url).resolve("tsx/esm");
+    const script = `import {toolRequestIdentityHash, signToolArguments, readSignedToolArguments, canonicalToolArguments} from ${JSON.stringify(modulePath)};
+      const args = {secretValue:'synthetic-process-proof'};
+      const input = {invocationId:'fixture',toolName:'fixture',canonicalArguments:canonicalToolArguments(args)};
+      const signed = process.env.VERIFY_PAYLOAD || signToolArguments(input);
+      process.stdout.write(JSON.stringify({identity:toolRequestIdentityHash(args),signed,
+        verified:readSignedToolArguments({...input,signedArguments:signed})?.secretValue === args.secretValue}));`;
+    const run = (signed?: string) => promisify(execFile)(process.execPath,
+      ["--import", loader, "--input-type=module", "-e", script], {
+        env: { ...process.env, PAPERCLIP_TOOL_ACTION_SIGNING_SECRET: "", PAPERCLIP_SECRETS_MASTER_KEY: "",
+          PAPERCLIP_SECRETS_MASTER_KEY_FILE: keyFile, VERIFY_PAYLOAD: signed ?? "" },
+      }).then(result => JSON.parse(result.stdout) as { identity: string; signed: string; verified: boolean });
+    const results = await Promise.all(Array.from({ length: 6 }, () => run()));
+    expect(new Set(results.map(result => result.identity)).size).toBe(1);
+    expect(results.every(result => result.verified)).toBe(true);
+    expect(Buffer.from(readFileSync(keyFile, "utf8"), "base64")).toHaveLength(32);
+    expect(statSync(keyFile).mode & 0o777).toBe(0o600);
+    const restarted = await run(results[0].signed);
+    expect(restarted).toEqual({ ...results[0], verified: true });
+  }, 30_000);
 
   it("encrypts secret-bearing approvals at rest and round trips the complete approval binding", () => {
     const args = { projectId: "prj_fixture", key: "API_KEY", secretValue: "fixture-private-environment-value", target: ["preview"] };
@@ -174,12 +235,14 @@ describe("tool content guards", () => {
     expect(JSON.parse(Buffer.from(ordinary, "base64url").toString()).version).toBe(1);
   });
 
-  it("still requires the configured secret when reading an encrypted approval", () => {
+  it("does not decrypt an explicit-key approval using the durable fallback key", () => {
     const input = { invocationId: "invocation-1", toolName: "fixture", canonicalArguments: canonicalToolArguments({ secretValue: "private-value" }), signingSecret };
     const signedArguments = signToolArguments(input);
     vi.stubEnv("PAPERCLIP_TOOL_ACTION_SIGNING_SECRET", "");
+    vi.stubEnv("PAPERCLIP_SECRETS_MASTER_KEY", "");
+    vi.stubEnv("PAPERCLIP_SECRETS_MASTER_KEY_FILE", isolatedKeyFile());
     try {
-      expect(() => readSignedToolArguments({ ...input, signedArguments, signingSecret: undefined })).toThrow(ToolActionSigningSecretMissingError);
+      expect(readSignedToolArguments({ ...input, signedArguments, signingSecret: undefined })).toBeNull();
     } finally { vi.unstubAllEnvs(); }
   });
 
