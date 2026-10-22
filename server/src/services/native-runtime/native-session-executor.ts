@@ -11819,8 +11819,10 @@ async function createRunnerdBackendWithinSessionClaim(
       return current.execute(call);
     };
     const backend = createNativeSessionBackend(input.execution, {
+      // The plugin resolves the VM directory while preparing the launch. Core keeps
+      // its host environment out of the plugin and records the prepared directory.
       runnerInstanceId: prior?.runnerInstanceId ?? effectiveRunnerInstanceId, environment: {},
-      workingDirectoryAuthority: "remote_runner", dynamicTools, dynamicToolHandler: executeTool,
+      workingDirectoryAuthority: "runner_prepared_launch", dynamicTools, dynamicToolHandler: executeTool,
       completionFeedback: async result => { await authorityEpoch.definitions(); return nativeCompletionFeedback(input.db, input.execution.binding.runId, result); },
       codexTransportFactory: recovery => createRunnerdCodexTransport({ provider: provider.kind, stateDirectory: root,
         ...owner.driver, runnerArtifact: description.runner,

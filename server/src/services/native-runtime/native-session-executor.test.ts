@@ -110,7 +110,7 @@ vi.mock("./native-github-access.js", () => ({
 type BackendFactoryOptions = {
   runnerInstanceId?: string;
   acpxRuntimeDirectory?: string;
-  workingDirectoryAuthority?: "local_filesystem" | "remote_runner";
+  workingDirectoryAuthority?: "local_filesystem" | "remote_runner" | "runner_prepared_launch";
   codexTransportFactory?: (recoveryContext?: {
     persistedSession?: {
       driverSessionId: string;
@@ -11095,7 +11095,7 @@ describe("runnerd provider runtime wiring", () => {
       expect(state.createAssignedMcpTools).toHaveBeenCalledWith(expect.objectContaining({ gatewayPublicId: "assigned-test", bearerToken: "fixture-mcp-secret" }));
       expect(owner).toHaveBeenCalledWith(expect.objectContaining({ task, projectIds: target.runnerTaskProjectIds,
         credentialIdentity: undefined }));
-      expect(state.createBackend.mock.calls.at(-1)![1]).toMatchObject({ workingDirectoryAuthority: "remote_runner", environment: {} });
+      expect(state.createBackend.mock.calls.at(-1)![1]).toMatchObject({ workingDirectoryAuthority: "runner_prepared_launch", environment: {} });
       state.createBackend.mock.calls.at(-1)![1].codexTransportFactory!();
       const options = state.createTransport.mock.calls.at(-1)![0];
       expect(options).toMatchObject({ ...driver, runnerArtifact: { version: "fixture" },

@@ -29,8 +29,17 @@ const SENSITIVE_HOST_HOME_DIRECTORIES = [
   ".ssh",
 ] as const;
 
+/**
+ * Which party chooses and admits the provider working directory.
+ *
+ * - `local_filesystem`: Core supplies the directory and checks it locally.
+ * - `remote_runner`: Core supplies the remote directory; runnerd checks it.
+ * - `runner_prepared_launch`: the execution environment resolves the
+ *   directory while preparing the launch, and runnerd checks it. Core only
+ *   records the directory that the prepared launch reports.
+ */
 export type CodexWorkingDirectoryAuthority =
-  "local_filesystem" | "remote_runner";
+  "local_filesystem" | "remote_runner" | "runner_prepared_launch";
 
 function record(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -48,6 +57,9 @@ export function validateCodexWorkingDirectory(
   }
   if (authority === "remote_runner") {
     return validateRemoteRunnerWorkingDirectory(workingDirectory, environment);
+  }
+  if (authority === "runner_prepared_launch") {
+    return validatePreparedLaunchWorkingDirectory(workingDirectory);
   }
   const requested = resolve(workingDirectory);
   let resolved: string;
@@ -117,15 +129,41 @@ export function validateCodexWorkingDirectory(
   return resolved;
 }
 
+function isNormalizedRemotePath(path: string): boolean {
+  return (
+    posix.isAbsolute(path) &&
+    posix.normalize(path) === path &&
+    !/[\u0000-\u001f\u007f]/u.test(path)
+  );
+}
+
+/**
+ * Check the shape of a directory resolved by an execution environment. The
+ * directory exists only on the runner filesystem, so runnerd checks its
+ * existence and type before the provider starts.
+ */
+export function validatePreparedLaunchWorkingDirectory(
+  workingDirectory: unknown,
+): string {
+  if (
+    typeof workingDirectory !== "string" ||
+    !isNormalizedRemotePath(workingDirectory)
+  ) {
+    throw new Error(
+      "Prepared launch working directory must be a normalized absolute path",
+    );
+  }
+  if (workingDirectory === posix.parse(workingDirectory).root) {
+    throw new Error("Codex working directory cannot be a filesystem root");
+  }
+  return workingDirectory;
+}
+
 function validateRemoteRunnerWorkingDirectory(
   workingDirectory: string,
   environment: NodeJS.ProcessEnv,
 ): string {
-  if (
-    !posix.isAbsolute(workingDirectory) ||
-    posix.normalize(workingDirectory) !== workingDirectory ||
-    /[\u0000-\u001f\u007f]/u.test(workingDirectory)
-  ) {
+  if (!isNormalizedRemotePath(workingDirectory)) {
     throw new Error(
       "Remote Codex working directory must be a normalized absolute path",
     );

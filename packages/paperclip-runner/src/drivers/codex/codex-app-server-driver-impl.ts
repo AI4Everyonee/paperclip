@@ -38,6 +38,7 @@ import {
 import {
   boundedCodexValue,
   validateCodexWorkingDirectory as validateWorkingDirectory,
+  validatePreparedLaunchWorkingDirectory,
 } from "./codex-boundaries.js";
 import {
   codexCommandEnvironment,
@@ -168,6 +169,10 @@ export class CodexAppServerDriver implements HarnessDriver {
     if (!this.#caps.read) this.#caps.reconciliation = false;
   }
 
+  #preparedLaunch(): boolean {
+    return this.#options.workingDirectoryAuthority === "runner_prepared_launch";
+  }
+
   #direct(): boolean {
     return this.#options.conversationMode === "direct";
   }
@@ -266,27 +271,38 @@ export class CodexAppServerDriver implements HarnessDriver {
 
   async openSession(input: OpenHarnessSessionInput): Promise<HarnessSession> {
     input.signal?.throwIfAborted();
-    const workingDirectory = validateWorkingDirectory(
-      input.workingDirectory,
-      this.#options.environment,
-      this.#options.workingDirectoryAuthority,
+    // A prepared launch resolves its directory on the runner filesystem. The
+    // caller's directory is controller-local and never authorizes itself.
+    const workingDirectory = this.#preparedLaunch()
+      ? null
+      : validateWorkingDirectory(
+          input.workingDirectory,
+          this.#options.environment,
+          this.#options.workingDirectoryAuthority,
+        );
+    const transport = this.#transport(
+      workingDirectory === null ? undefined : { workingDirectory },
     );
-    const transport = this.#transport({ workingDirectory });
     const cancellation = bootstrapCancellation(transport, input.signal);
     try {
       await cancellation.wait(this.#persistProcessOwnership(transport));
       const initialize = await cancellation.wait(this.#initialize(transport));
       const requestedMode =
         this.#options.requestedCollaborationMode ?? "default";
+      const threadParams = createSecuredCodexThreadParams(
+        workingDirectory ?? "",
+        requestedMode,
+        this.#options.includeCollaborationModeInstructions ?? true,
+        this.#options.includeSkillInstructions ?? false,
+        this.#options.environment,
+      );
+      if (workingDirectory === null) {
+        delete threadParams.cwd;
+        delete threadParams.runtimeWorkspaceRoots;
+      }
       const response = await cancellation.wait(
         transport.request("thread/start", {
-          ...createSecuredCodexThreadParams(
-            workingDirectory,
-            requestedMode,
-            this.#options.includeCollaborationModeInstructions ?? true,
-            this.#options.includeSkillInstructions ?? false,
-            this.#options.environment,
-          ),
+          ...threadParams,
           approvalPolicy: this.#options.approvalPolicy ?? "never",
           ...(this.#options.model ? { model: this.#options.model } : {}),
           ...(this.#direct()
@@ -409,6 +425,17 @@ export class CodexAppServerDriver implements HarnessDriver {
         this.#options.environment,
         this.#options.workingDirectoryAuthority,
       );
+      if (
+        this.#preparedLaunch() &&
+        snapshot.workingDirectory !== undefined &&
+        snapshot.workingDirectory !== workingDirectory
+      ) {
+        await cancellation.wait(cancellation.close());
+        return {
+          recovered: false,
+          reason: "provider read a different working directory",
+        };
+      }
       const response = await cancellation.wait(
         transport.request("thread/resume", {
           excludeTurns: true,
@@ -809,7 +836,7 @@ export class CodexAppServerDriver implements HarnessDriver {
   #openedThread(
     response: Record<string, unknown>,
     initialize: Record<string, unknown>,
-    workingDirectory: string,
+    expectedWorkingDirectory: string | null,
     collaborationMode: Record<string, unknown> | null,
   ): OpenedCodexThread {
     const thread = record(response.thread);
@@ -825,6 +852,10 @@ export class CodexAppServerDriver implements HarnessDriver {
         `provider_initialize_protocol_error: provider=${this.#options.driverIdentity?.kind ?? "codex"} stage=session.open omitted provider session identity`,
       );
     }
+    const workingDirectory = this.#openedWorkingDirectory(
+      response,
+      expectedWorkingDirectory,
+    );
     const activePermissionProfile = record(thread.activePermissionProfile);
     const permissionProfileId = text(activePermissionProfile.id);
     const requestedMode = this.#options.requestedCollaborationMode ?? "default";
@@ -842,12 +873,6 @@ export class CodexAppServerDriver implements HarnessDriver {
       ...activePermissionProfile,
       id: requiredPermissionProfile,
     };
-    const returnedWorkingDirectory = text(response.cwd, workingDirectory);
-    if (resolve(returnedWorkingDirectory) !== workingDirectory) {
-      throw new Error(
-        "Codex thread response changed the assigned working directory",
-      );
-    }
     const providerIdentity = parseProviderIdentity(thread.providerIdentity);
     return {
       threadId,
@@ -917,6 +942,38 @@ export class CodexAppServerDriver implements HarnessDriver {
       },
       lineage: lineageFromThread(thread),
     };
+  }
+
+  #openedWorkingDirectory(
+    response: Record<string, unknown>,
+    expected: string | null,
+  ): string {
+    if (!this.#preparedLaunch()) {
+      if (expected === null) {
+        throw new Error("Codex working directory is required");
+      }
+      const returned = text(response.cwd, expected);
+      if (resolve(returned) !== expected) {
+        throw new Error(
+          "Codex thread response changed the assigned working directory",
+        );
+      }
+      return expected;
+    }
+    // The transport reports the directory from the prepared launch. Recovery
+    // supplies the directory it already recorded, which must not change.
+    if (response.cwd === undefined) {
+      throw new Error(
+        "Prepared launch did not report its provider working directory",
+      );
+    }
+    const returned = validatePreparedLaunchWorkingDirectory(response.cwd);
+    if (expected !== null && returned !== expected) {
+      throw new Error(
+        "Codex thread response changed the assigned working directory",
+      );
+    }
+    return returned;
   }
 
   #session(input: {
