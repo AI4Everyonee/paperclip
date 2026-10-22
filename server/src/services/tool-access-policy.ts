@@ -49,6 +49,7 @@ import {
   profileIdsInBindingOrder,
 } from "./tool-profile-binding-precedence.js";
 import { recordToolRuntimeAuditWriteFailure } from "./tool-runtime-metrics.js";
+import { toolRequestIdentityHash } from "./tool-content-guards.js";
 
 type ToolAccessContext = {
   companyId: string;
@@ -766,7 +767,7 @@ function scopeAllowsTool(scope: Record<string, unknown> | null, ctx: ToolAccessC
   return selectorMatches(selectors, ctx);
 }
 
-export function toolAccessPolicyService(db: Db) {
+export function toolAccessPolicyService(db: Db, options: { toolActionSigningSecret?: string } = {}) {
   async function listPolicies(companyId: string) {
     return db
       .select()
@@ -1154,7 +1155,9 @@ export function toolAccessPolicyService(db: Db) {
         upstreamToolName,
         toolName: input.request.toolName,
         riskLevel,
-        argumentsHash: redaction.summary.sha256 ?? sha256(input.request.arguments ?? {}),
+        argumentsHash: input.request.sideEffecting
+          ? toolRequestIdentityHash(input.request.arguments, options.toolActionSigningSecret)
+          : redaction.summary.sha256 ?? sha256(input.request.arguments ?? {}),
         arguments: input.request.arguments ?? {},
       },
     };
@@ -1635,9 +1638,12 @@ export function toolAccessPolicyService(db: Db) {
     const loaded = await loadContext(input);
     if (!loaded.ok) throw new Error("Cannot record invocation for invalid tool access context");
     const { ctx, redaction } = loaded;
-    const argumentsHash = redaction.summary.sha256 ?? sha256(input.request.arguments ?? {});
+    const requestIdentityHash = input.request.sideEffecting || accessDecision.decision === "require_approval"
+      ? toolRequestIdentityHash(input.request.arguments, options.toolActionSigningSecret)
+      : null;
+    const argumentsHash = input.request.sideEffecting ? requestIdentityHash! : ctx.argumentsHash;
     const idempotencyKey = input.request.idempotencyKey
-      ?? (input.request.sideEffecting ? sideEffectIdempotencyKey(ctx, argumentsHash) : null);
+      ?? (input.request.sideEffecting ? sideEffectIdempotencyKey(ctx, requestIdentityHash!) : null);
     if (idempotencyKey) {
       const [existing] = await db.select().from(toolInvocations).where(and(
         eq(toolInvocations.companyId, input.companyId),
@@ -1689,7 +1695,7 @@ export function toolAccessPolicyService(db: Db) {
         invocationId: invocation.id,
         issueId: ctx.issueId,
         status: "pending",
-        canonicalArgumentsHash: invocation.argumentsHash ?? argumentsHash,
+        canonicalArgumentsHash: requestIdentityHash!,
         canonicalArgumentsSummary: redaction.summary,
         requestedByAgentId: ctx.actorType === "agent" ? ctx.agentId : null,
         requestedByUserId: ctx.actorType === "user" ? ctx.actorId : null,

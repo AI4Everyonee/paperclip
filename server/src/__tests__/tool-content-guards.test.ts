@@ -1,11 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
-import { createHmac } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import {
   canonicalToolArguments,
   readSignedToolArguments,
   readSignedToolArgumentsPayload,
   resolveToolActionSigningSecret,
   signToolArguments,
+  summarizeToolValue,
+  toolRequestIdentityHash,
   ToolActionSigningSecretMissingError,
   ToolContentValidationError,
   validateToolContent,
@@ -14,6 +16,38 @@ import {
 
 describe("tool content guards", () => {
   const signingSecret = "test-tool-action-signing-secret";
+
+  it("keeps secret replacements distinct while redacted summaries stay identical", () => {
+    const first = { key: "SERVICE_PASSWORD", secretValue: "1234" };
+    const second = { ...first, secretValue: "5678" };
+    expect(summarizeToolValue(first)).toEqual(summarizeToolValue(second));
+    const identity = toolRequestIdentityHash(first, signingSecret);
+    expect(identity).toMatch(/^[a-f0-9]{64}$/);
+    expect(identity).toBe(toolRequestIdentityHash({ secretValue: "1234", key: "SERVICE_PASSWORD" }, signingSecret));
+    expect(identity).not.toBe(toolRequestIdentityHash(second, signingSecret));
+    expect(identity).not.toBe(toolRequestIdentityHash(first, "another-instance-key"));
+    expect(identity).not.toBe(createHash("sha256").update(canonicalToolArguments(first)).digest("hex"));
+    expect(identity).not.toBe(createHmac("sha256", signingSecret).update(canonicalToolArguments(first)).digest("hex"));
+  });
+
+  it("includes values beyond audit preview truncation in request identities", () => {
+    const prefix = "x".repeat(5000);
+    expect(toolRequestIdentityHash({ body: `${prefix}first` })).not.toBe(toolRequestIdentityHash({ body: `${prefix}second` }));
+    const entries = Array.from({ length: 50 }, (_, index) => index);
+    expect(toolRequestIdentityHash([...entries, "first"])).not.toBe(toolRequestIdentityHash([...entries, "second"]));
+  });
+
+  it("uses explicit or configured keys for sensitive request identities and never falls back to an unkeyed digest", () => {
+    vi.stubEnv("PAPERCLIP_TOOL_ACTION_SIGNING_SECRET", "");
+    try {
+      expect(() => toolRequestIdentityHash({ secretValue: "1234" })).toThrow(ToolActionSigningSecretMissingError);
+      expect(() => toolRequestIdentityHash([{ password: "1234" }])).toThrow(ToolActionSigningSecretMissingError);
+      const explicit = toolRequestIdentityHash({ secretValue: "1234" }, signingSecret);
+      vi.stubEnv("PAPERCLIP_TOOL_ACTION_SIGNING_SECRET", signingSecret);
+      expect(toolRequestIdentityHash({ secretValue: "1234" })).toBe(explicit);
+      expect(toolRequestIdentityHash({ secretValue: "1234" }, "other-key")).not.toBe(explicit);
+    } finally { vi.unstubAllEnvs(); }
+  });
 
   it("signs canonical arguments and rejects tampered arguments", () => {
     const canonicalArguments = canonicalToolArguments({ body: "hello", noteId: "n1" });
