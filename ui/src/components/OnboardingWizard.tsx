@@ -9,7 +9,7 @@ import { LocalProviderLoginInstructions } from "./AdapterLoginChrome";
 import { useLocalAiLogin } from "./ai-connections/useLocalAiLogin";
 import { aiConnectionsApi } from "@/api/ai-connections";
 import { AiConnectionField, aiProviderForAdapter } from "./ai-connections/AiConnectionField";
-import { useConnectionModels } from "./ai-connections/useConnectionModels";
+import { useConnectionModelsState } from "./ai-connections/useConnectionModels";
 import { PAPERCLIP_RUNNER_ACPX_PROFILES } from "@paperclipai/adapter-utils";
 import { aiConnectionBindingSchema } from "@paperclipai/shared";
 import type { AiConnectionBinding } from "@paperclipai/shared";
@@ -811,12 +811,16 @@ function OnboardingWizardInner({
         ? apiKeySecretRef.current.aiConnection : undefined);
     return savedSubscription?.aiConnection ?? (managedSubscriptionRef.current?.companyId === createdCompanyId && managedSubscriptionRef.current.binding.provider === managedProvider ? managedSubscriptionRef.current.binding : undefined);
   }
-  const connectionModels = useConnectionModels(
+  const connectionModelState = useConnectionModelsState(
     effectiveOnboardingOpen && step === 4 && credentialMode === "api" ? createdCompanyId : null,
     managedBindingForStep(), adapterType,
   );
+  const connectionModels = connectionModelState.connectionModels;
   const hasGatewaySelection = credentialMode === "api" && gatewayConnection?.companyId === createdCompanyId && gatewayConnection.adapterType === adapterType;
+  const gatewayLookupFailed = hasGatewaySelection && !connectionModelState.refreshing
+    && Boolean(connectionModelState.error || (!connectionModels && !connectionModelState.loading));
   const connectionModelReady = (!hasGatewaySelection && !connectionModels) || Boolean(connectionModels
+    && (!hasGatewaySelection || (!connectionModelState.error && !connectionModelState.refreshing))
     && model.trim() && (connectionModels.models.length === 0 || connectionModels.models.some(entry => entry.id === model.trim())));
   createdCompanyIdRef.current = createdCompanyId;
 
@@ -3176,7 +3180,14 @@ function OnboardingWizardInner({
                           }}
                           onSubmit={() => handleConnectStepPrimary()}
                         />}
-                        {hasGatewaySelection && <p role="status" className="text-sm text-muted-foreground">Gateway connection saved. Choose a model, then Connect to test it and finish setting up your agent.</p>}
+                        {hasGatewaySelection && (gatewayLookupFailed ? <>
+                          <p role="alert" className="text-sm text-destructive">Your saved gateway connection could not be loaded. Retry to choose a model and connect your agent.</p>
+                          <Button type="button" variant="outline" disabled={loading || adapterEnvLoading} onClick={() => { void connectionModelState.refresh(); }}>
+                            Retry loading connection
+                          </Button>
+                        </> : <p role="status" className="text-sm text-muted-foreground">{connectionModelState.refreshing
+                          ? "Loading your saved gateway connection…"
+                          : "Gateway connection saved. Choose a model, then Connect to test it and finish setting up your agent."}</p>)}
                         {connectionModels && <ModelDropdown models={connectionModels.models} value={model}
                           onChange={setModel} open={modelOpen} onOpenChange={setModelOpen}
                           allowDefault={false} required groupByProvider={false}

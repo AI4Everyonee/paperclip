@@ -2129,11 +2129,15 @@ describe("OnboardingWizard restore-gate (stale localStorage across accounts)", (
       return { root, queryClient };
     }
 
-    it("saves a custom gateway without probing, then explicitly tests and hires with its selected model", async () => {
+    it.each([["successful refresh", false], ["failed refresh and retry", true]] as const)("saves a custom gateway without probing, then explicitly tests and hires with its selected model: %s", async (_scenario, failRefresh) => {
       const gatewayAccounts: import("@paperclipai/shared").AiConnectionList = {
         currentUserId: "user-1", canManageConnections: true, connections: [],
       };
-      managedApi.list.mockResolvedValue(gatewayAccounts as never);
+      let lookupFails = false;
+      managedApi.list.mockImplementation(async () => {
+        if (lookupFails) throw new Error("connection lookup failed");
+        return structuredClone(gatewayAccounts) as never;
+      });
       managedApi.create.mockImplementationOnce(async () => {
         gatewayAccounts.connections = [{
           id: "managed-connection", grantId: "managed-grant", companyId: "company-new",
@@ -2141,6 +2145,7 @@ describe("OnboardingWizard restore-gate (stale localStorage across accounts)", (
           ownerUserId: "user-1", isDefault: false, status: "connected",
           routing: { kind: "gateway", protocol: "responses", auth: "bearer", baseUrl: "https://gateway.example.test/v1", models: [{ id: "gpt-5.4-mini" }] },
         }];
+        lookupFails = failRefresh;
         return { connectionId: "managed-connection", grantId: "managed-grant" };
       });
       mockAdapterBuild.buildAdapterConfig.mockImplementation(values => ({ provider: "codex", model: values?.model }));
@@ -2169,6 +2174,16 @@ describe("OnboardingWizard restore-gate (stale localStorage across accounts)", (
           provider: "openai", method: "api_key", apiKey: "example-gateway-key", ownership: "personal",
           agentIds: [expect.any(String)], routing: expect.objectContaining({ kind: "gateway", protocol: "responses", models: [{ id: "gpt-5.4-mini" }] }),
         }));
+        if (failRefresh) {
+          await vi.waitFor(() => expect(document.body.textContent).toContain("Your saved gateway connection could not be loaded."));
+          expect(document.querySelector('select[aria-label="Model"]')).toBeNull();
+          expect([...document.body.querySelectorAll("button")].find(entry => entry.textContent?.trim() === "Connect")!.disabled).toBe(true);
+          expect(mockEnvironmentsApi.probe).not.toHaveBeenCalled();
+          expect(mockAgentsApi.testEnvironment).not.toHaveBeenCalled();
+          expect(mockAgentsApi.hire).not.toHaveBeenCalled();
+          lookupFails = false;
+          await click("Retry loading connection");
+        }
         await vi.waitFor(() => expect(document.querySelector('select[aria-label="Model"]'), document.body.textContent ?? "").toBeTruthy());
         expect(mockEnvironmentsApi.probe).not.toHaveBeenCalled();
         expect(mockAgentsApi.testEnvironment).not.toHaveBeenCalled();
