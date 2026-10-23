@@ -8,12 +8,40 @@ import { runnerSuites } from "../catalog.js";
 import { productJourneys, parseTargetConfig, preparationPreview } from "./catalog.js";
 import { journeyFixtures } from "./fixtures.js";
 import { taskProperties } from "./task-properties.js";
-import { JourneyError, type JourneyContext, type JourneyEvidence, type JourneyOutcome, type TargetProvider, type TargetSession } from "./types.js";
+import { JourneyError, type JourneyContext, type JourneyEvidence, type JourneyOutcome, type TargetLifecycleInput, type TargetProvider, type TargetSession } from "./types.js";
 import type { RunnerE2EResult } from "../types.js";
 import { regenerateRunnerDashboard } from "../dashboard-regenerate.js";
 import { resolveRunnerE2ESource } from "../source.js";
 import { validateRetainedRunnerResult } from "../result-validation.js";
 import { validateJourneyCollection } from "./collection.js";
+
+const cleanupGraceMs = 600_000;
+const stopReserveMs = 20_000;
+const browserCloseReserveMs = 10_000;
+
+/** Providers must fence late mutations when this signal is aborted. */
+async function withinLifecycleDeadline<T>(deadlineAt: number, code: string, operation: (input: TargetLifecycleInput) => Promise<T>, parentSignal?: AbortSignal): Promise<T> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let cancel: () => void = () => {};
+  const expiration = new Promise<never>((_resolve, reject) => {
+    cancel = () => { controller.abort(); reject(new JourneyError("failed", code)); };
+    if (deadlineAt <= Date.now() || parentSignal?.aborted) cancel();
+    else {
+      timer = setTimeout(cancel, deadlineAt - Date.now());
+      parentSignal?.addEventListener("abort", cancel, { once: true });
+    }
+  });
+  try {
+    return await Promise.race([expiration, Promise.resolve().then(() => {
+      if (controller.signal.aborted) throw new JourneyError("failed", code);
+      return operation({ signal: controller.signal, deadlineAt });
+    })]);
+  } finally {
+    clearTimeout(timer);
+    parentSignal?.removeEventListener("abort", cancel);
+  }
+}
 
 export function journeyFailure(error: unknown): { outcome: Exclude<JourneyOutcome, "passed">; code: string } {
   if (error instanceof JourneyError) return error;
@@ -56,6 +84,9 @@ export async function launchProductJourneys(args: string[], repositoryRoot: stri
   let ready: JourneyContext | undefined;
   let fixtures: ReturnType<typeof journeyFixtures> | undefined;
   let prerequisiteFailure: ReturnType<typeof journeyFailure> | undefined;
+  let releaseSettled = false;
+  let cleanupDeadlineAt = 0;
+  let cleanupWorkDeadlineAt = 0;
   const results: RunnerE2EResult[] = [];
   let sha: string | null = null;
   try { sha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repositoryRoot, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim(); } catch { /* Packaged harnesses may not include Git metadata. */ }
@@ -159,9 +190,8 @@ export async function launchProductJourneys(args: string[], repositoryRoot: stri
       if (!await persistSafely()) prerequisiteFailure ??= { outcome: "failed", code: "evidence_persistence_failed" };
     }
   } finally {
-    clearTimeout(timer);
     try {
-      const collected = await session?.collect() ?? [];
+      const collected = await withinLifecycleDeadline(deadlineAt, "evidence_collection_timeout", input => session?.collect(input) ?? Promise.resolve([]), controller.signal) ?? [];
       const seen = new Set<string>();
       for (const receipt of collected) {
         validateJourneyCollection(receipt);
@@ -177,39 +207,54 @@ export async function launchProductJourneys(args: string[], repositoryRoot: stri
       }
       for (const result of results) {
         if (result.caseId === "cloud-onboarding" && result.status === "passed" && (!seen.has(result.caseId) || !result.runIds?.length || !result.productJourney?.operations || !result.productJourney.operations.traceIds.length)) throw new JourneyError("failed", "paid_journey_receipt_missing");
+        // Success-only checks must run before a disposable target can be deleted.
+        // Cleanup is provisional here; the observed cleanup result is retained below.
+        if (result.status === "passed") validateRetainedRunnerResult({ ...result, cleanup: "passed" });
       }
       for (const result of results) result.productJourney!.phases.push({ phase: "collection", outcome: "passed" });
     } catch (error) {
       const failure = journeyFailure(error);
-      for (const result of results) { result.status = "failed"; if (result.productJourney!.outcome === "passed") { result.productJourney!.outcome = "failed"; result.error = failure.code; } result.productJourney!.phases.push({ phase: "collection", outcome: "failed", code: failure.code === "paid_journey_receipt_missing" ? failure.code : "evidence_collection_failed" }); }
+      for (const result of results) { result.status = "failed"; if (result.productJourney!.outcome === "passed") { result.productJourney!.outcome = "failed"; result.error = failure.code; } result.productJourney!.phases.push({ phase: "collection", outcome: "failed", code: ["paid_journey_receipt_missing", "evidence_collection_timeout"].includes(failure.code) ? failure.code : "evidence_collection_failed" }); }
     }
+    clearTimeout(timer);
+    cleanupDeadlineAt = Date.now() + cleanupGraceMs;
+    cleanupWorkDeadlineAt = cleanupDeadlineAt - stopReserveMs - browserCloseReserveMs;
     // A private provider checkpoints the measured evidence before deleting resources.
     await persistSafely();
     try {
-      const disposition = await session?.release(results.every(r => r.status === "passed") ? "passed" : "failed") ?? "released";
+      const disposition = await withinLifecycleDeadline(cleanupWorkDeadlineAt, "target_cleanup_timeout", input => session?.release(results.every(r => r.status === "passed") ? "passed" : "failed", input) ?? Promise.resolve("released" as const));
+      releaseSettled = true;
       for (const result of results) { if (result.cleanup !== "failed") result.cleanup = "passed"; result.productJourney!.resourceDisposition = disposition; result.productJourney!.phases.push({ phase: "cleanup", outcome: "passed" }); }
-    } catch {
-      for (const result of results) { result.status = "failed"; result.cleanup = "failed"; if (result.productJourney!.outcome === "passed") result.productJourney!.outcome = "failed"; result.failureClass = "cleanup_failure"; result.productJourney!.phases.push({ phase: "cleanup", outcome: "failed", code: "target_cleanup_failed" }); }
+    } catch (error) {
+      failFinalization(error instanceof JourneyError && error.code === "target_cleanup_timeout" ? error.code : "target_cleanup_failed");
+      // A timed-out release may still have an in-flight request. Stop-only recovery
+      // gets its own bounded signal and cannot delete resources or free the lease.
+      try { await withinLifecycleDeadline(Math.min(cleanupDeadlineAt - browserCloseReserveMs, Date.now() + stopReserveMs), "target_stop_timeout", input => session?.stop?.(input) ?? Promise.resolve()); }
+      catch { failFinalization("target_stop_failed"); }
     }
-    try { await browser?.close(); } catch {
-      for (const result of results) { result.status = "failed"; result.cleanup = "failed"; if (result.productJourney!.outcome === "passed") result.productJourney!.outcome = "failed"; result.productJourney!.resourceDisposition = "cleanup-failed"; result.productJourney!.phases.push({ phase: "cleanup", outcome: "failed", code: "browser_cleanup_failed" }); }
-    }
+    try { await withinLifecycleDeadline(Math.min(cleanupDeadlineAt, Date.now() + browserCloseReserveMs), "browser_cleanup_timeout", () => browser?.close() ?? Promise.resolve()); }
+    catch (error) { failFinalization(error instanceof JourneyError && error.code === "browser_cleanup_timeout" ? error.code : "browser_cleanup_failed"); }
     process.removeListener("SIGINT", abort); process.removeListener("SIGTERM", abort);
     await persistSafely();
   }
   // If the final write failed, make one bounded attempt to retain that failure itself.
   if (!reportPersisted) await persistSafely();
   if (reportPersisted) {
-    try { await regenerateRunnerDashboard({ bundle: outputDir, historyFile: null }); }
+    try { await withinLifecycleDeadline(cleanupWorkDeadlineAt, "report_generation_timeout", () => regenerateRunnerDashboard({ bundle: outputDir, historyFile: null })); }
     catch { failFinalization("report_generation_failed"); await persistSafely(); }
   }
-  try { if (reportPersisted) await session?.finalizeEvidence?.(); }
+  try {
+    if (reportPersisted) await withinLifecycleDeadline(cleanupWorkDeadlineAt, "evidence_finalization_timeout", input => {
+      // Only a settled release can authorize lease-releasing finalization.
+      return (releaseSettled ? session?.finalizeEvidence?.(input) : session?.checkpointEvidence?.(input)) ?? Promise.resolve();
+    });
+  }
   catch {
     failFinalization("evidence_finalization_failed");
     await persistSafely();
     if (reportPersisted) {
-      try { await regenerateRunnerDashboard({ bundle: outputDir, historyFile: null }); } catch { /* Durable provider checkpoint and cleanup failure remain recoverable. */ }
-      try { await session?.checkpointEvidence?.(); } catch { /* Keep the provider's pending manifest and exclusive leases for recovery. */ }
+      try { await withinLifecycleDeadline(cleanupWorkDeadlineAt, "report_generation_timeout", () => regenerateRunnerDashboard({ bundle: outputDir, historyFile: null })); } catch { /* Durable provider checkpoint and cleanup failure remain recoverable. */ }
+      try { await withinLifecycleDeadline(cleanupWorkDeadlineAt, "evidence_checkpoint_timeout", input => session?.checkpointEvidence?.(input) ?? Promise.resolve()); } catch { /* Keep the provider's pending manifest and exclusive leases for recovery. */ }
     }
   }
   if (!reportPersisted) console.error("evidence_persistence_failed");

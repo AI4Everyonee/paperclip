@@ -67,18 +67,24 @@ export interface JourneyContext {
   capabilities: string[];
   startingState: "recipe" | "onboarding";
 }
+export interface TargetLifecycleInput {
+  signal: AbortSignal;
+  deadlineAt: number;
+}
 export interface TargetSession {
   context?: JourneyContext;
   authenticate(): Promise<void>;
   prepare(): Promise<JourneyContext>;
   onboard?(evidence: JourneyEvidence): Promise<JourneyContext>;
   identity(): Promise<DeploymentIdentity>;
-  collect(): Promise<JourneyCollection[] | void>;
-  release(outcome: JourneyOutcome): Promise<"released" | "retained">;
+  collect(input?: TargetLifecycleInput): Promise<JourneyCollection[] | void>;
+  release(outcome: JourneyOutcome, input?: TargetLifecycleInput): Promise<"released" | "retained">;
+  /** Stop only run-owned work; never delete fixtures or release leases. */
+  stop?(input?: TargetLifecycleInput): Promise<void>;
   /** Durable final evidence must precede releasing a Cloud target's held leases. */
-  finalizeEvidence?(): Promise<void>;
+  finalizeEvidence?(input?: TargetLifecycleInput): Promise<void>;
   /** Publish the observed finalization failure without releasing resources or leases. */
-  checkpointEvidence?(): Promise<void>;
+  checkpointEvidence?(input?: TargetLifecycleInput): Promise<void>;
   /** Durable intent before creation; receipt immediately after creation. */
   own(resource: { kind: "issue" | "agent" | "connection"; name: string; id?: string }): Promise<void>;
 }

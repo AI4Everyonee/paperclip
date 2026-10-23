@@ -81,6 +81,20 @@ prerequisite remains failed at that boundary; every dependent selection receives
 a blocked result. Unsupported target capabilities are distinct from failures.
 Deployment/configuration drift during a journey fails its result.
 
+Collection must finish within the campaign deadline. Cleanup and evidence
+publication then share a separate ten-minute grace period, with the last thirty
+seconds reserved for a twenty-second stop-only fallback and ten-second browser
+close. These are cleanup bounds and do not admit further story or model work.
+Provider lifecycle hooks receive a deadline and cancellation signal; they must
+bound in-flight requests and fence late resource mutations or lease writes when
+the signal aborts. A timed-out release cannot authorize evidence finalization or
+lease release. Its manifest stays available for cleanup recovery.
+
+Every would-be successful result is checked against the retained-result success
+contract before successful cleanup. Missing assertions or paid accounting proof
+turn the campaign into a failure while preserving valid cost receipts, so an
+invalid success cannot trigger disposable-stack deletion.
+
 Only post-journey screenshots are captured. Browser state, login codes, raw
 errors, credentials, request headers, and auth screenshots are excluded. All
 Cloud evidence is private; the public history publisher rejects these bundles.

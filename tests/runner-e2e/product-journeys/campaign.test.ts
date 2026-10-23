@@ -27,8 +27,9 @@ import { chromium } from "@playwright/test";
 import { launchProductJourneys } from "./launch.js";
 import { regenerateRunnerDashboard } from "../dashboard-regenerate.js";
 const roots: string[]=[];
-afterEach(async()=>{vi.restoreAllMocks(); persistenceFault.kind=null; persistenceFault.active=false; persistenceFault.latestReport=null; process.exitCode=0; await Promise.all(roots.splice(0).map(root=>rm(root,{recursive:true,force:true})));});
-async function run(options:{authFailure?:boolean;onboardingFailure?:boolean;drift?:boolean;cleanupFailure?:boolean;collectionFailure?:boolean;mini?:boolean;missingReceipt?:boolean;finalizationFailure?:boolean;persistenceFailure?:"write"|"rename";persistenceAfter?:"collection"|"release"}={}) {
+afterEach(async()=>{vi.useRealTimers(); vi.restoreAllMocks(); persistenceFault.kind=null; persistenceFault.active=false; persistenceFault.latestReport=null; process.exitCode=0; await Promise.all(roots.splice(0).map(root=>rm(root,{recursive:true,force:true})));});
+type Hook = "collect" | "release" | "stop" | "finalizeEvidence" | "checkpointEvidence";
+async function run(options:{authFailure?:boolean;onboardingFailure?:boolean;drift?:boolean;cleanupFailure?:boolean;collectionFailure?:boolean;mini?:boolean;missingReceipt?:boolean;zeroRequests?:boolean;missingCheck?:boolean;finalizationFailure?:boolean;persistenceFailure?:"write"|"rename";persistenceAfter?:"collection"|"release";stallHook?:Hook;onHook?:(hook:Hook,signal?:AbortSignal)=>void}={}) {
   const root=await mkdtemp(path.join(os.tmpdir(),"journey-campaign-test-")); roots.push(root);
   const module=path.join(root,"provider.mjs");
   await writeFile(module, `import {readFile,writeFile} from 'node:fs/promises';
@@ -37,10 +38,10 @@ let onboarded=false;
 const context={identity,startingState:'onboarding',capabilities:['company','board-user','task-write'],page:{async screenshot(){} }};
 export const provider={version:1, async acquire(input){return {
 async authenticate(){${options.authFailure ? "throw {outcome:'failed',code:'login_code_expired'};" : ""}},
-async onboard(evidence){${options.onboardingFailure ? "throw {outcome:'failed',code:'onboarding_failed'};" : "evidence.checks.push(...['fresh-workspace','ui-connection-and-native-agent','first-task-complete','downloadable-artifact-verified','native-trace-verified'].map(id=>({id,passed:true})));onboarded=true;return context;"}},
+async onboard(evidence){${options.onboardingFailure ? "throw {outcome:'failed',code:'onboarding_failed'};" : `evidence.checks.push(...['fresh-workspace','ui-connection-and-native-agent','first-task-complete','downloadable-artifact-verified'${options.missingCheck ? "" : ",'native-trace-verified'"}].map(id=>({id,passed:true})));onboarded=true;return context;`}},
 async prepare(){throw Error('onboarding receipt was not reused')},
 async identity(){return {...identity,commit:'${(options.drift?"b":"a").repeat(40)}'}},
-async collect(){${options.collectionFailure ? "throw Error('private collection error');" : options.missingReceipt ? "return [];" : "return onboarded?[{journeyId:'cloud-onboarding',runIds:['run-1'],usage:{runs:[{runId:'run-1',usage:{costUsd:0.01}}]},operations:{campaignId:input.campaignId,attemptId:input.campaignId+':cloud-onboarding:1',modelCostUsd:0.01,setupCostUsd:0.005,requestCount:2,feedback:{collection:'complete',complaints:0,suggestions:0},traceIds:['a'.repeat(32)]}}]:[];"}}, async own(){}, async release(){${options.cleanupFailure ? "throw Error('private raw error');" : "return 'released';"}}
+async collect(){${options.collectionFailure ? "throw Error('private collection error');" : options.missingReceipt ? "return [];" : `return onboarded?[{journeyId:'cloud-onboarding',runIds:['run-1'],usage:{runs:[{runId:'run-1',usage:{costUsd:0.01}}]},operations:{campaignId:input.campaignId,attemptId:input.campaignId+':cloud-onboarding:1',modelCostUsd:0.01,setupCostUsd:0.005,requestCount:${options.zeroRequests ? 0 : 2},feedback:{collection:'complete',complaints:0,suggestions:0},traceIds:['a'.repeat(32)]}}]:[];`}}, async own(){}, async release(){${options.cleanupFailure ? "throw Error('private raw error');" : "return 'released';"}}, async stop(){}
 , async finalizeEvidence(){
 const report=JSON.parse(await readFile(input.outputDir+'/normalized-results.json','utf8'));
 if(report.results.some(r=>r.cleanup==='not_started'))throw Error('final evidence preceded cleanup');
@@ -53,17 +54,18 @@ await writeFile(input.outputDir+'/failure-checkpoint.json',JSON.stringify(report
   const config={version:1,id:"qa",mode:"new-cloud",adapterModule:module,journeys:["cloud-onboarding","task-properties"],executionEnvironment:"daytona",baseline:{features:{},connections:[]},limits:{durationMs:60000,modelBudgetCents:1000,maxRuns:1},...(options.mini?{modelProfileId:"runner-codex-mini"}:{})};
   const file=path.join(root,"target.json"),output=path.join(root,"report"); await writeFile(file,JSON.stringify(config));
   const lifecycle: string[] = [];
-  if (options.persistenceFailure) {
-    persistenceFault.kind=options.persistenceFailure;
+  {
+    persistenceFault.kind=options.persistenceFailure ?? null;
     const { provider } = await import(pathToFileURL(module).href);
     const acquire = provider.acquire;
     vi.spyOn(provider,"acquire").mockImplementation(async (...args: unknown[]) => {
       const session = await acquire(...args);
       return { ...session,
-        async collect() { try { return await session.collect(); } finally { if (options.persistenceAfter !== "release") persistenceFault.active=true; } },
-        async release(outcome: string) { lifecycle.push(`release:${outcome}`); try { return await session.release(outcome); } finally { if (options.persistenceAfter === "release") persistenceFault.active=true; } },
-        async finalizeEvidence() { lifecycle.push("finalizeEvidence"); return session.finalizeEvidence(); },
-        async checkpointEvidence() { lifecycle.push("checkpointEvidence"); return session.checkpointEvidence(); },
+        async collect(input?: {signal:AbortSignal}) { options.onHook?.("collect",input?.signal); if(options.stallHook==="collect")await new Promise(()=>{}); try { return await session.collect(); } finally { if (options.persistenceAfter !== "release" && options.persistenceFailure) persistenceFault.active=true; } },
+        async release(outcome: string,input?: {signal:AbortSignal}) { lifecycle.push(`release:${outcome}`); options.onHook?.("release",input?.signal); if(options.stallHook==="release")await new Promise(()=>{}); try { return await session.release(outcome); } finally { if (options.persistenceAfter === "release" && options.persistenceFailure) persistenceFault.active=true; } },
+        async stop(input?: {signal:AbortSignal}) { lifecycle.push("stop"); options.onHook?.("stop",input?.signal); if(options.stallHook==="stop")await new Promise(()=>{}); },
+        async finalizeEvidence(input?: {signal:AbortSignal}) { lifecycle.push("finalizeEvidence"); options.onHook?.("finalizeEvidence",input?.signal); if(options.stallHook==="finalizeEvidence")await new Promise(()=>{}); return session.finalizeEvidence(); },
+        async checkpointEvidence(input?: {signal:AbortSignal}) { lifecycle.push("checkpointEvidence"); options.onHook?.("checkpointEvidence",input?.signal); if(options.stallHook==="checkpointEvidence")await new Promise(()=>{}); return session.checkpointEvidence(); },
       };
     });
   }
@@ -127,6 +129,50 @@ describe("product journey campaign boundary outcomes",()=>{
     expect(campaign.results[0].status).toBe("failed");
     expect(campaign.results[0].error).toBe("paid_journey_receipt_missing");
     expect(campaign.results[0].productJourney.phases).toContainEqual({phase:"collection",outcome:"failed",code:"paid_journey_receipt_missing"});
+  });
+  it.each(["zeroRequests","missingCheck"] as const)("retains disposable resources when success evidence has %s",async field=>{
+    const campaign=await run({[field]:true});
+    expect(campaign.results.every((r:any)=>r.status==="failed")).toBe(true);
+    expect(campaign.lifecycle[0]).toBe("release:failed");
+    expect(campaign.results[0].runIds).toEqual(["run-1"]);
+    expect(campaign.results[0].productJourney.operations.modelCostUsd).toBe(0.01);
+    expect(campaign.results[0].productJourney.phases).toContainEqual({phase:"collection",outcome:"failed",code:"evidence_collection_failed"});
+  });
+  it.each(["collect","release","stop","finalizeEvidence","checkpointEvidence"] as const)("bounds a stalled %s hook and still closes the browser",async hook=>{
+    vi.useFakeTimers();
+    const close=vi.fn(async()=>{});
+    vi.spyOn(chromium,"launch").mockResolvedValueOnce({newContext:async()=>({setDefaultTimeout(){},pages:()=>[]}),close} as any);
+    let notify!:()=>void;
+    const entered=new Promise<void>(resolve=>{notify=resolve;});
+    let signal:AbortSignal|undefined;
+    const pending=run({stallHook:hook,...(hook==="checkpointEvidence"?{finalizationFailure:true}:{}),...(hook==="stop"?{cleanupFailure:true}:{}),onHook(name,input){if(name===hook){signal=input;notify();}}});
+    await entered;
+    await vi.advanceTimersByTimeAsync(hook==="collect"?60_000:600_000);
+    const campaign=await pending;
+    expect(signal?.aborted).toBe(true);
+    expect(close).toHaveBeenCalledOnce();
+    expect(campaign.results.every((r:any)=>r.status==="failed")).toBe(true);
+    if(hook==="collect")expect(campaign.lifecycle[0]).toBe("release:failed");
+    if(hook==="release"){
+      expect(campaign.lifecycle).toContain("stop");
+      expect(campaign.lifecycle).not.toContain("finalizeEvidence");
+      expect(campaign.results.every((r:any)=>r.cleanup==="failed"&&r.productJourney.resourceDisposition==="cleanup-failed")).toBe(true);
+    }
+  });
+  it("bounds a stalled browser close without skipping final evidence",async()=>{
+    vi.useFakeTimers();
+    let notify!:()=>void;
+    const entered=new Promise<void>(resolve=>{notify=resolve;});
+    const close=vi.fn(async()=>{notify();await new Promise(()=>{});});
+    vi.spyOn(chromium,"launch").mockResolvedValueOnce({newContext:async()=>({setDefaultTimeout(){},pages:()=>[]}),close} as any);
+    const pending=run();
+    await entered;
+    await vi.advanceTimersByTimeAsync(10_000);
+    const campaign=await pending;
+    expect(close).toHaveBeenCalledOnce();
+    expect(campaign.results.every((r:any)=>r.cleanup==="failed")).toBe(true);
+    expect(campaign.results[0].productJourney.phases).toContainEqual({phase:"cleanup",outcome:"failed",code:"browser_cleanup_timeout"});
+    expect(campaign.lifecycle).toContain("finalizeEvidence");
   });
   it("retains an evidence-finalization failure after the cleanup report was written",async()=>{
     const campaign=await run({finalizationFailure:true});
