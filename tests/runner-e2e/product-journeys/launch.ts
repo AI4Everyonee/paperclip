@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { randomUUID, createHash } from "node:crypto";
 import { mkdir, readFile, writeFile, rename } from "node:fs/promises";
+import { renameSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { chromium, type Browser, type BrowserContext } from "@playwright/test";
@@ -33,10 +34,15 @@ async function withinLifecycleDeadline<T>(deadlineAt: number, code: string, oper
     }
   });
   try {
-    return await Promise.race([expiration, Promise.resolve().then(() => {
+    const value = await Promise.race([expiration, Promise.resolve().then(() => {
       if (controller.signal.aborted) throw new JourneyError("failed", code);
       return operation({ signal: controller.signal, deadlineAt });
     })]);
+    if (controller.signal.aborted || parentSignal?.aborted || Date.now() >= deadlineAt) {
+      controller.abort();
+      throw new JourneyError("failed", code);
+    }
+    return value;
   } finally {
     clearTimeout(timer);
     parentSignal?.removeEventListener("abort", cancel);
@@ -119,6 +125,19 @@ export async function launchProductJourneys(args: string[], repositoryRoot: stri
     }
   };
   const persistSafely = async () => { try { await persist(); return true; } catch { return false; } };
+  const renderDashboard = async () => {
+    // An uncooperative late renderer can only write its own private staging area.
+    // The launcher's normalized results remain authoritative, including failures.
+    const staging = path.join(outputDir, `.dashboard-${randomUUID()}`);
+    await withinLifecycleDeadline(cleanupWorkDeadlineAt, "report_generation_timeout", async () => {
+      await mkdir(staging, { mode: 0o700 });
+      await regenerateRunnerDashboard({ bundle: outputDir, historyFile: null, outputDirectory: staging });
+    });
+    // Publication has no async gap in which a timeout can persist a newer failure.
+    if (Date.now() >= cleanupWorkDeadlineAt) throw new JourneyError("failed", "report_generation_timeout");
+    renameSync(path.join(staging, "index.html"), path.join(outputDir, "index.html"));
+    renameSync(path.join(staging, "dashboard.html"), path.join(outputDir, "dashboard.html"));
+  };
   process.once("SIGINT", abort); process.once("SIGTERM", abort);
   const timer = setTimeout(abort, config.limits.durationMs);
   try {
@@ -132,7 +151,7 @@ export async function launchProductJourneys(args: string[], repositoryRoot: stri
       if (provider?.version !== 1 || typeof provider.acquire !== "function") throw new JourneyError("blocked", "unsupported_target_provider_contract");
       session = await provider.acquire({ config, campaignId, deadlineAt, browser: context, signal: controller.signal, repositoryRoot, outputDir, harness: { revision: source.sha, definitionHash: suiteDefinitionHash } });
       await session.authenticate();
-      fixtures = journeyFixtures(session);
+      fixtures = journeyFixtures(session, campaignId);
     } catch (error) { prerequisiteFailure = journeyFailure(error); }
     for (const [index, id] of config.journeys.entries()) {
       const startedAt = new Date().toISOString();
@@ -240,7 +259,7 @@ export async function launchProductJourneys(args: string[], repositoryRoot: stri
   // If the final write failed, make one bounded attempt to retain that failure itself.
   if (!reportPersisted) await persistSafely();
   if (reportPersisted) {
-    try { await withinLifecycleDeadline(cleanupWorkDeadlineAt, "report_generation_timeout", () => regenerateRunnerDashboard({ bundle: outputDir, historyFile: null })); }
+    try { await renderDashboard(); }
     catch { failFinalization("report_generation_failed"); await persistSafely(); }
   }
   try {
@@ -253,7 +272,7 @@ export async function launchProductJourneys(args: string[], repositoryRoot: stri
     failFinalization("evidence_finalization_failed");
     await persistSafely();
     if (reportPersisted) {
-      try { await withinLifecycleDeadline(cleanupWorkDeadlineAt, "report_generation_timeout", () => regenerateRunnerDashboard({ bundle: outputDir, historyFile: null })); } catch { /* Durable provider checkpoint and cleanup failure remain recoverable. */ }
+      try { await renderDashboard(); } catch { /* Durable provider checkpoint and cleanup failure remain recoverable. */ }
       try { await withinLifecycleDeadline(cleanupWorkDeadlineAt, "evidence_checkpoint_timeout", input => session?.checkpointEvidence?.(input) ?? Promise.resolve()); } catch { /* Keep the provider's pending manifest and exclusive leases for recovery. */ }
     }
   }

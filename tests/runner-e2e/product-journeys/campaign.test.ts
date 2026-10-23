@@ -21,7 +21,9 @@ vi.mock("node:fs/promises", async importOriginal => {
   };
 });
 vi.mock("@playwright/test", () => ({ chromium: { launch: async () => ({ newContext: async () => ({setDefaultTimeout(){}, pages:()=>[]}), close:async()=>{} }) }, expect: {} }));
-vi.mock("../dashboard-regenerate.js", () => ({ regenerateRunnerDashboard: vi.fn(async () => {}) }));
+vi.mock("../dashboard-regenerate.js", () => ({ regenerateRunnerDashboard: vi.fn(async (input:{outputDirectory?:string}) => {
+  if(input.outputDirectory){const {writeFile}=await import("node:fs/promises");await Promise.all(["index.html","dashboard.html"].map(name=>writeFile(path.join(input.outputDirectory!,name),"dashboard")));}
+}) }));
 vi.mock("./task-properties.js", () => ({taskProperties: async (_context:unknown,_session:unknown,_id:unknown,evidence:any) => {evidence.checks.push({id:"assignment-persisted",passed:true},{id:"no-agent-work",passed:true});}}));
 import { chromium } from "@playwright/test";
 import { launchProductJourneys } from "./launch.js";
@@ -35,7 +37,7 @@ async function run(options:{authFailure?:boolean;onboardingFailure?:boolean;drif
   await writeFile(module, `import {readFile,writeFile} from 'node:fs/promises';
 const identity={kind:'cloud',targetId:'qa',origin:'https://qa.example.test',commit:'${"a".repeat(40)}',cloudRelease:'v1',runtimeImage:'image',configurationHash:'config'};
 let onboarded=false;
-const context={identity,startingState:'onboarding',capabilities:['company','board-user','task-write'],page:{async screenshot(){} }};
+const context={identity,company:{id:'company-1',issuePrefix:'QA'},api:{post:async()=>({id:'issue-fixture-1',identifier:'QA-1'})},startingState:'onboarding',capabilities:['company','board-user','task-write'],page:{async screenshot(){} }};
 export const provider={version:1, async acquire(input){return {
 async authenticate(){${options.authFailure ? "throw {outcome:'failed',code:'login_code_expired'};" : ""}},
 async onboard(evidence){${options.onboardingFailure ? "throw {outcome:'failed',code:'onboarding_failed'};" : `evidence.checks.push(...['fresh-workspace','ui-connection-and-native-agent','first-task-complete','downloadable-artifact-verified'${options.missingCheck ? "" : ",'native-trace-verified'"}].map(id=>({id,passed:true})));onboarded=true;return context;`}},
@@ -71,7 +73,7 @@ await writeFile(input.outputDir+'/failure-checkpoint.json',JSON.stringify(report
   }
   await launchProductJourneys(["--target-config",file,"--output",output],path.resolve(import.meta.dirname,"../../.."));
   return { ...JSON.parse(await readFile(path.join(output,"normalized-results.json"),"utf8")),
-    lifecycle, attemptedReport: persistenceFault.latestReport,
+    lifecycle, outputDir:output, attemptedReport: persistenceFault.latestReport,
     failureCheckpoint: await readFile(path.join(output,"failure-checkpoint.json"),"utf8").then(JSON.parse).catch(()=>null) };
 }
 describe("product journey campaign boundary outcomes",()=>{
@@ -173,6 +175,39 @@ describe("product journey campaign boundary outcomes",()=>{
     expect(campaign.results.every((r:any)=>r.cleanup==="failed")).toBe(true);
     expect(campaign.results[0].productJourney.phases).toContainEqual({phase:"cleanup",outcome:"failed",code:"browser_cleanup_timeout"});
     expect(campaign.lifecycle).toContain("finalizeEvidence");
+  });
+  it("rejects a hook that finishes past its deadline before the timeout callback runs",async()=>{
+    vi.useFakeTimers();
+    let signal:AbortSignal|undefined;
+    const campaign=await run({onHook(hook,input){if(hook==="collect"){signal=input;vi.setSystemTime(Date.now()+60_000);}}});
+    expect(signal?.aborted).toBe(true);
+    expect(campaign.lifecycle[0]).toBe("release:failed");
+    expect(campaign.results[0].productJourney.phases).toContainEqual({phase:"collection",outcome:"failed",code:"evidence_collection_timeout"});
+  });
+  it("keeps a timed-out renderer's late writes away from retained failure results",async()=>{
+    vi.useFakeTimers();
+    let entered!:()=>void,release!:()=>void,finished!:()=>void;
+    const rendering=new Promise<void>(resolve=>{entered=resolve;});
+    const continueRendering=new Promise<void>(resolve=>{release=resolve;});
+    const lateWrite=new Promise<void>(resolve=>{finished=resolve;});
+    vi.mocked(regenerateRunnerDashboard).mockImplementationOnce(async input=>{
+      const earlier=await readFile(path.join(input.bundle,"normalized-results.json"),"utf8");
+      entered();
+      await continueRendering;
+      await writeFile(path.join(input.outputDirectory??input.bundle,"normalized-results.json"),earlier);
+      finished();
+    });
+    const pending=run({onHook(hook){if(hook==="release")vi.advanceTimersByTime(569_000);}});
+    await rendering;
+    await vi.advanceTimersByTimeAsync(1_000);
+    const campaign=await pending;
+    expect(campaign.results.every((r:any)=>r.status==="failed")).toBe(true);
+    release();
+    await lateWrite;
+    const retained=JSON.parse(await readFile(path.join(campaign.outputDir,"normalized-results.json"),"utf8"));
+    expect(retained.results.every((r:any)=>r.status==="failed")).toBe(true);
+    expect(retained.results[0].productJourney.phases).toContainEqual({phase:"cleanup",outcome:"failed",code:"report_generation_failed"});
+    expect(campaign.lifecycle).not.toContain("finalizeEvidence");
   });
   it("retains an evidence-finalization failure after the cleanup report was written",async()=>{
     const campaign=await run({finalizationFailure:true});
