@@ -7,7 +7,7 @@ import { assertPublicCampaign } from "../history-publish.js";
 import { validateJourneyCollection } from "./collection.js";
 import { summarizeExecutionBilling, aggregateCampaignBilling } from "../billing.js";
 import { discoverReportCatalog } from "../report-catalog.js";
-import { isIncompleteFirstTaskResult } from "../case-outcome.js";
+import { isIncompleteFirstTaskResult, renderCaseOutcome } from "../case-outcome.js";
 import type { RunnerE2EResult } from "../types.js";
 import type { JourneyContext, TargetSession } from "./types.js";
 const local = { version: 1, id: "local-qa", mode: "managed-self-hosted", journeys: ["task-properties"], executionEnvironment: "local", baseline: { features: {}, connections: [] }, limits: { durationMs: 10000, modelBudgetCents: 0, maxRuns: 0 } };
@@ -81,5 +81,19 @@ describe("deployment journey contracts", () => {
     expect(isIncompleteFirstTaskResult(value)).toBe(true);
     value.productJourney!.outcome="failed";
     expect(isIncompleteFirstTaskResult(value)).toBe(false);
+  });
+  it("renders deployment provenance and distinct unsupported outcomes without exposing unknown fields", () => {
+    const value=result(); value.status="failed";
+    value.productJourney!.outcome="unsupported";
+    value.productJourney!.campaignId="campaign-1"; value.productJourney!.attemptId="attempt-1";
+    Object.assign(value.productJourney!.deployment!, { cloudRelease:"release-1", runtimeImage:"image-1", configurationHash:"config-1", effectiveFeatures:{runner:true}, executionEnvironment:{id:"environment-1",driver:"sandbox",status:"active"} });
+    Object.assign(value.productJourney!, { credential:"must-not-render" });
+    const output=renderCaseOutcome(value,true,[]);
+    for (const text of ["unsupported", "Deployment and setup evidence", "campaign-1", "attempt-1", "release-1", "image-1", "config-1", "starting state: recipe", "Effective features", "environment-1", "sandbox"]) expect(output).toContain(text);
+    expect(output).not.toContain("must-not-render");
+    value.productJourney!.deployment!.runtimeImage="<script>alert(1)</script>";
+    expect(renderCaseOutcome(value,true,[])).toContain("&lt;script&gt;");
+    value.productJourney!.deployment!.effectiveFeatures={runner:"not-a-boolean"} as any;
+    expect(()=>validateRetainedRunnerResult(value)).toThrow();
   });
 });

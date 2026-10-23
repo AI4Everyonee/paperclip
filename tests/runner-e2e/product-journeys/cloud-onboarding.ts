@@ -24,14 +24,20 @@ export interface CloudOnboardingInput {
 export async function cloudOnboarding(input: CloudOnboardingInput): Promise<JourneyContext> {
   const { page, evidence, campaignId } = input;
   const name = `Journey QA ${campaignId}`;
-  const nameInput = page.getByLabel("Organization name", { exact: true });
+  const firstRunName = page.getByLabel("Name", { exact: true });
+  const organizationName = page.getByLabel("Organization name", { exact: true });
   const createLink = page.getByRole("link", { name: /^(Create (?:a new )?organization|\+ New organization)$/ }).first();
-  // Empty portfolios enter the create form directly; registered QA accounts use the visible plus link.
-  await expect(nameInput.or(createLink).first()).toBeVisible();
-  if (!await nameInput.isVisible()) await createLink.click();
-  await nameInput.fill(name);
+  // The first organization uses the signup Name/Next form. Later organizations
+  // use Organization name/Create organization, reached from the managed portfolio.
+  await expect(firstRunName.or(organizationName).or(createLink).first()).toBeVisible();
+  if (!await firstRunName.isVisible() && !await organizationName.isVisible()) {
+    await createLink.click();
+    await expect(organizationName).toBeVisible();
+  }
+  const firstRun = await firstRunName.isVisible();
+  await (firstRun ? firstRunName : organizationName).fill(name);
   await input.beforeWorkspace(name);
-  await page.getByRole("button", { name: "Create organization", exact: true }).click();
+  await page.getByRole("button", { name: firstRun ? "Next" : "Create organization", exact: true }).click();
   const context = await input.workspaceCreated();
   const { api, company } = context;
   evidence.deployment = context.identity;
@@ -41,7 +47,7 @@ export async function cloudOnboarding(input: CloudOnboardingInput): Promise<Jour
   await input.own({ kind: "agent", name });
   await page.getByLabel("Agent name", { exact: true }).fill(name);
   await page.getByRole("button", { name: "Next", exact: true }).click();
-  await page.getByRole("button", { name: "Use API keys instead", exact: true }).click();
+  await page.getByRole("button", { name: "Use API key instead", exact: true }).click();
   await page.getByRole("radio", { name: /OpenAI.*API/ }).click();
   await page.getByRole("button", { name: "Use a custom gateway", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Custom gateway connection", exact: true });
@@ -59,7 +65,7 @@ export async function cloudOnboarding(input: CloudOnboardingInput): Promise<Jour
   await input.own({ kind: "connection", name: connectionName, id: connection.id });
   await page.getByRole("combobox", { name: "Model", exact: true }).selectOption(input.gateway.model);
   await page.locator("summary").filter({ hasText: "Advanced" }).click();
-  await page.getByRole("combobox", { name: "Runner", exact: true }).click();
+  await page.getByRole("button", { name: "Runner", exact: true }).click();
   await page.getByRole("option", { name: /^Paperclip Runner/ }).click();
   await input.qualify(context, connection.id);
   // Connect performs the production probe and agent creation. Never press Retry.

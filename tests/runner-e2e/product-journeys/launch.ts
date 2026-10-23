@@ -26,6 +26,7 @@ export function journeyFailure(error: unknown): { outcome: Exclude<JourneyOutcom
 }
 
 export async function launchProductJourneys(args: string[], repositoryRoot: string) {
+  args = args.filter(arg => arg !== "--");
   if (args.includes("--list") && !args.includes("--target-config")) { console.log(JSON.stringify(productJourneys, null, 2)); return; }
   const allowed = new Set(["--target-config", "--output", "--preview", "--list", "--suite"]);
   const values = new Map<string, string>();
@@ -51,8 +52,6 @@ export async function launchProductJourneys(args: string[], repositoryRoot: stri
   let browser: Browser | undefined;
   let context: BrowserContext | undefined;
   const abort = () => { controller.abort(); for (const page of context?.pages() ?? []) void page.close().catch(() => {}); };
-  process.once("SIGINT", abort); process.once("SIGTERM", abort);
-  const timer = setTimeout(abort, config.limits.durationMs);
   let session: TargetSession | undefined;
   let ready: JourneyContext | undefined;
   let fixtures: ReturnType<typeof journeyFixtures> | undefined;
@@ -65,10 +64,32 @@ export async function launchProductJourneys(args: string[], repositoryRoot: stri
   for (const name of ["catalog.ts", "task-properties.ts", "cloud-onboarding.ts", "onboarding-first-task.ts", "fixtures.ts", "launch.ts", "types.ts", "collection.ts", "local-target.ts"]) definitionHash.update(await readFile(path.join(import.meta.dirname, name)));
   const suiteDefinitionHash = definitionHash.digest("hex");
   const expected = config.journeys.map(id => `product-journeys.${config.id}.${id === "cloud-onboarding" ? config.modelProfileId : "browser"}.${config.executionEnvironment}.${id}`);
-  const persist = async () => {
-    await writeFile(path.join(outputDir, "normalized-results.tmp"), JSON.stringify({ schema: "paperclip.runner-e2e.campaign/v2", campaignId, generatedAt: new Date().toISOString(), expected, source, results }, null, 2), { mode: 0o600 });
-    await rename(path.join(outputDir, "normalized-results.tmp"), path.join(outputDir, "normalized-results.json"));
+  let reportPersisted = false;
+  const failFinalization = (code: string) => {
+    for (const result of results) {
+      result.status = "failed"; result.cleanup = "failed"; result.failureClass = "cleanup_failure";
+      result.error ??= code;
+      if (result.productJourney!.outcome === "passed") result.productJourney!.outcome = "failed";
+      result.productJourney!.resourceDisposition = "cleanup-failed";
+      if (!result.productJourney!.phases.some(phase => phase.phase === "cleanup" && phase.code === code)) {
+        result.productJourney!.phases.push({ phase: "cleanup", outcome: "failed", code });
+      }
+    }
   };
+  const persist = async () => {
+    try {
+      await writeFile(path.join(outputDir, "normalized-results.tmp"), JSON.stringify({ schema: "paperclip.runner-e2e.campaign/v2", campaignId, generatedAt: new Date().toISOString(), expected, source, results }, null, 2), { mode: 0o600 });
+      await rename(path.join(outputDir, "normalized-results.tmp"), path.join(outputDir, "normalized-results.json"));
+      reportPersisted = true;
+    } catch {
+      reportPersisted = false;
+      failFinalization("evidence_persistence_failed");
+      throw new JourneyError("failed", "evidence_persistence_failed");
+    }
+  };
+  const persistSafely = async () => { try { await persist(); return true; } catch { return false; } };
+  process.once("SIGINT", abort); process.once("SIGTERM", abort);
+  const timer = setTimeout(abort, config.limits.durationMs);
   try {
     try {
       browser = await chromium.launch({ headless: !config.headed, ...(process.env.PAPERCLIP_RUNNER_E2E_CHROMIUM_EXECUTABLE ? { executablePath: process.env.PAPERCLIP_RUNNER_E2E_CHROMIUM_EXECUTABLE } : {}) });
@@ -135,7 +156,7 @@ export async function launchProductJourneys(args: string[], repositoryRoot: stri
         if (id === "cloud-onboarding" || !ready) prerequisiteFailure = failure;
       }
       result.finishedAt = new Date().toISOString(); result.durationMs = Date.parse(result.finishedAt) - Date.parse(startedAt);
-      await persist();
+      if (!await persistSafely()) prerequisiteFailure ??= { outcome: "failed", code: "evidence_persistence_failed" };
     }
   } finally {
     clearTimeout(timer);
@@ -163,10 +184,10 @@ export async function launchProductJourneys(args: string[], repositoryRoot: stri
       for (const result of results) { result.status = "failed"; if (result.productJourney!.outcome === "passed") { result.productJourney!.outcome = "failed"; result.error = failure.code; } result.productJourney!.phases.push({ phase: "collection", outcome: "failed", code: failure.code === "paid_journey_receipt_missing" ? failure.code : "evidence_collection_failed" }); }
     }
     // A private provider checkpoints the measured evidence before deleting resources.
-    await persist();
+    await persistSafely();
     try {
       const disposition = await session?.release(results.every(r => r.status === "passed") ? "passed" : "failed") ?? "released";
-      for (const result of results) { result.cleanup = "passed"; result.productJourney!.resourceDisposition = disposition; result.productJourney!.phases.push({ phase: "cleanup", outcome: "passed" }); }
+      for (const result of results) { if (result.cleanup !== "failed") result.cleanup = "passed"; result.productJourney!.resourceDisposition = disposition; result.productJourney!.phases.push({ phase: "cleanup", outcome: "passed" }); }
     } catch {
       for (const result of results) { result.status = "failed"; result.cleanup = "failed"; if (result.productJourney!.outcome === "passed") result.productJourney!.outcome = "failed"; result.failureClass = "cleanup_failure"; result.productJourney!.phases.push({ phase: "cleanup", outcome: "failed", code: "target_cleanup_failed" }); }
     }
@@ -174,24 +195,24 @@ export async function launchProductJourneys(args: string[], repositoryRoot: stri
       for (const result of results) { result.status = "failed"; result.cleanup = "failed"; if (result.productJourney!.outcome === "passed") result.productJourney!.outcome = "failed"; result.productJourney!.resourceDisposition = "cleanup-failed"; result.productJourney!.phases.push({ phase: "cleanup", outcome: "failed", code: "browser_cleanup_failed" }); }
     }
     process.removeListener("SIGINT", abort); process.removeListener("SIGTERM", abort);
-    await persist();
+    await persistSafely();
   }
-  const failFinalization = (code: string) => {
-    for (const result of results) {
-      result.status = "failed"; result.cleanup = "failed"; result.failureClass = "cleanup_failure";
-      if (result.productJourney!.outcome === "passed") result.productJourney!.outcome = "failed";
-      result.productJourney!.resourceDisposition = "cleanup-failed";
-      result.productJourney!.phases.push({ phase: "cleanup", outcome: "failed", code });
-    }
-  };
-  try { await regenerateRunnerDashboard({ bundle: outputDir, historyFile: null }); }
-  catch { failFinalization("report_generation_failed"); await persist(); }
-  try { await session?.finalizeEvidence?.(); }
+  // If the final write failed, make one bounded attempt to retain that failure itself.
+  if (!reportPersisted) await persistSafely();
+  if (reportPersisted) {
+    try { await regenerateRunnerDashboard({ bundle: outputDir, historyFile: null }); }
+    catch { failFinalization("report_generation_failed"); await persistSafely(); }
+  }
+  try { if (reportPersisted) await session?.finalizeEvidence?.(); }
   catch {
     failFinalization("evidence_finalization_failed");
-    await persist();
-    try { await regenerateRunnerDashboard({ bundle: outputDir, historyFile: null }); } catch { /* Durable provider checkpoint and cleanup failure remain recoverable. */ }
+    await persistSafely();
+    if (reportPersisted) {
+      try { await regenerateRunnerDashboard({ bundle: outputDir, historyFile: null }); } catch { /* Durable provider checkpoint and cleanup failure remain recoverable. */ }
+      try { await session?.checkpointEvidence?.(); } catch { /* Keep the provider's pending manifest and exclusive leases for recovery. */ }
+    }
   }
-  console.log(`Product journeys: ${results.filter(r => r.status === "passed").length}/${results.length} passed; private report ${outputDir}/dashboard.html`);
-  if (results.some(r => r.status !== "passed")) process.exitCode = 1;
+  if (!reportPersisted) console.error("evidence_persistence_failed");
+  console.log(`Product journeys: ${results.filter(r => r.status === "passed").length}/${results.length} passed; ${reportPersisted ? `private report ${outputDir}/dashboard.html` : "evidence pending recovery"}`);
+  if (!reportPersisted || results.some(r => r.status !== "passed")) process.exitCode = 1;
 }

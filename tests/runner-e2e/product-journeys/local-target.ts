@@ -15,6 +15,7 @@ export const provider: TargetProvider = {
       if (!/^[a-f0-9]{40}$/.test(health.commit) || health.deploymentMode !== "local_trusted") throw new JourneyError("blocked", "local_identity_unavailable");
       const settings = await api.get("/api/instance/settings/experimental");
       return { kind: "self-hosted" as const, targetId: input.config.id, origin: target.origin, commit: health.commit, cloudRelease: null, runtimeImage: null,
+        effectiveFeatures: Object.fromEntries(Object.entries(settings).filter(([, value]) => typeof value === "boolean")) as Record<string, boolean>,
         configurationHash: createHash("sha256").update(JSON.stringify(settings)).digest("hex") };
     };
     return {

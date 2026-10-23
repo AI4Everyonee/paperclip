@@ -12,6 +12,8 @@ export interface DeploymentIdentity {
   cloudRelease: string | null;
   runtimeImage: string | null;
   configurationHash: string;
+  effectiveFeatures?: Record<string, boolean>;
+  executionEnvironment?: { id: string; driver: string; status: string };
 }
 export interface JourneyEvidence {
   targetId?: string;
@@ -75,6 +77,8 @@ export interface TargetSession {
   release(outcome: JourneyOutcome): Promise<"released" | "retained">;
   /** Durable final evidence must precede releasing a Cloud target's held leases. */
   finalizeEvidence?(): Promise<void>;
+  /** Publish the observed finalization failure without releasing resources or leases. */
+  checkpointEvidence?(): Promise<void>;
   /** Durable intent before creation; receipt immediately after creation. */
   own(resource: { kind: "issue" | "agent" | "connection"; name: string; id?: string }): Promise<void>;
 }

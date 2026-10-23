@@ -2,6 +2,24 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, writeFile, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
+import { pathToFileURL } from "node:url";
+const persistenceFault = vi.hoisted(() => ({ kind: null as "write" | "rename" | null, active: false, latestReport: null as any }));
+vi.mock("node:fs/promises", async importOriginal => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual,
+    async writeFile(...args: Parameters<typeof actual.writeFile>) {
+      if (String(args[0]).endsWith("/normalized-results.tmp")) {
+        persistenceFault.latestReport = JSON.parse(String(args[1]));
+        if (persistenceFault.active && persistenceFault.kind === "write") throw Error("private disk diagnostic api_key_fixture");
+      }
+      return actual.writeFile(...args);
+    },
+    async rename(...args: Parameters<typeof actual.rename>) {
+      if (String(args[1]).endsWith("/normalized-results.json") && persistenceFault.active && persistenceFault.kind === "rename") throw Error("private rename diagnostic api_key_fixture");
+      return actual.rename(...args);
+    },
+  };
+});
 vi.mock("@playwright/test", () => ({ chromium: { launch: async () => ({ newContext: async () => ({setDefaultTimeout(){}, pages:()=>[]}), close:async()=>{} }) }, expect: {} }));
 vi.mock("../dashboard-regenerate.js", () => ({ regenerateRunnerDashboard: vi.fn(async () => {}) }));
 vi.mock("./task-properties.js", () => ({taskProperties: async (_context:unknown,_session:unknown,_id:unknown,evidence:any) => {evidence.checks.push({id:"assignment-persisted",passed:true},{id:"no-agent-work",passed:true});}}));
@@ -9,11 +27,11 @@ import { chromium } from "@playwright/test";
 import { launchProductJourneys } from "./launch.js";
 import { regenerateRunnerDashboard } from "../dashboard-regenerate.js";
 const roots: string[]=[];
-afterEach(async()=>{vi.restoreAllMocks(); process.exitCode=0; await Promise.all(roots.splice(0).map(root=>rm(root,{recursive:true,force:true})));});
-async function run(options:{authFailure?:boolean;onboardingFailure?:boolean;drift?:boolean;cleanupFailure?:boolean;collectionFailure?:boolean;mini?:boolean;missingReceipt?:boolean;finalizationFailure?:boolean}={}) {
+afterEach(async()=>{vi.restoreAllMocks(); persistenceFault.kind=null; persistenceFault.active=false; persistenceFault.latestReport=null; process.exitCode=0; await Promise.all(roots.splice(0).map(root=>rm(root,{recursive:true,force:true})));});
+async function run(options:{authFailure?:boolean;onboardingFailure?:boolean;drift?:boolean;cleanupFailure?:boolean;collectionFailure?:boolean;mini?:boolean;missingReceipt?:boolean;finalizationFailure?:boolean;persistenceFailure?:"write"|"rename";persistenceAfter?:"collection"|"release"}={}) {
   const root=await mkdtemp(path.join(os.tmpdir(),"journey-campaign-test-")); roots.push(root);
   const module=path.join(root,"provider.mjs");
-  await writeFile(module, `import {readFile} from 'node:fs/promises';
+  await writeFile(module, `import {readFile,writeFile} from 'node:fs/promises';
 const identity={kind:'cloud',targetId:'qa',origin:'https://qa.example.test',commit:'${"a".repeat(40)}',cloudRelease:'v1',runtimeImage:'image',configurationHash:'config'};
 let onboarded=false;
 const context={identity,startingState:'onboarding',capabilities:['company','board-user','task-write'],page:{async screenshot(){} }};
@@ -27,13 +45,45 @@ async collect(){${options.collectionFailure ? "throw Error('private collection e
 const report=JSON.parse(await readFile(input.outputDir+'/normalized-results.json','utf8'));
 if(report.results.some(r=>r.cleanup==='not_started'))throw Error('final evidence preceded cleanup');
 ${options.finalizationFailure ? "throw Error('private evidence upload diagnostic');" : ""}
+}, async checkpointEvidence(){
+const report=JSON.parse(await readFile(input.outputDir+'/normalized-results.json','utf8'));
+if(report.results.some(r=>r.cleanup!=='failed'))throw Error('failure checkpoint preceded failure persistence');
+await writeFile(input.outputDir+'/failure-checkpoint.json',JSON.stringify(report));
 }}}};`);
   const config={version:1,id:"qa",mode:"new-cloud",adapterModule:module,journeys:["cloud-onboarding","task-properties"],executionEnvironment:"daytona",baseline:{features:{},connections:[]},limits:{durationMs:60000,modelBudgetCents:1000,maxRuns:1},...(options.mini?{modelProfileId:"runner-codex-mini"}:{})};
   const file=path.join(root,"target.json"),output=path.join(root,"report"); await writeFile(file,JSON.stringify(config));
+  const lifecycle: string[] = [];
+  if (options.persistenceFailure) {
+    persistenceFault.kind=options.persistenceFailure;
+    const { provider } = await import(pathToFileURL(module).href);
+    const acquire = provider.acquire;
+    vi.spyOn(provider,"acquire").mockImplementation(async (...args: unknown[]) => {
+      const session = await acquire(...args);
+      return { ...session,
+        async collect() { try { return await session.collect(); } finally { if (options.persistenceAfter !== "release") persistenceFault.active=true; } },
+        async release(outcome: string) { lifecycle.push(`release:${outcome}`); try { return await session.release(outcome); } finally { if (options.persistenceAfter === "release") persistenceFault.active=true; } },
+        async finalizeEvidence() { lifecycle.push("finalizeEvidence"); return session.finalizeEvidence(); },
+        async checkpointEvidence() { lifecycle.push("checkpointEvidence"); return session.checkpointEvidence(); },
+      };
+    });
+  }
   await launchProductJourneys(["--target-config",file,"--output",output],path.resolve(import.meta.dirname,"../../.."));
-  return JSON.parse(await readFile(path.join(output,"normalized-results.json"),"utf8"));
+  return { ...JSON.parse(await readFile(path.join(output,"normalized-results.json"),"utf8")),
+    lifecycle, attemptedReport: persistenceFault.latestReport,
+    failureCheckpoint: await readFile(path.join(output,"failure-checkpoint.json"),"utf8").then(JSON.parse).catch(()=>null) };
 }
 describe("product journey campaign boundary outcomes",()=>{
+  it("accepts the conventional pnpm separator in a credential-free preview", async () => {
+    const root=await mkdtemp(path.join(os.tmpdir(),"journey-preview-test-")); roots.push(root);
+    const file=path.join(root,"target.json");
+    await writeFile(file,JSON.stringify({version:1,id:"qa",mode:"existing-cloud",adapterModule:"/not-installed-private-provider.mjs",adapterConfig:{operatorSecret:"never-print"},journeys:["task-properties"],executionEnvironment:"daytona",baseline:{features:{},connections:[]},limits:{durationMs:60000,modelBudgetCents:0,maxRuns:0}}));
+    const output=vi.spyOn(console,"log").mockImplementation(()=>{});
+    const launch=vi.spyOn(chromium,"launch");
+    await launchProductJourneys(["--","--target-config",file,"--preview"],path.resolve(import.meta.dirname,"../../.."));
+    const preview=JSON.parse(String(output.mock.calls[0]?.[0]));
+    expect(preview).toMatchObject({modelProfileId:null,retries:0,limits:{modelBudgetCents:0,maxRuns:0}});
+    expect(JSON.stringify(preview)).not.toContain("never-print"); expect(launch).not.toHaveBeenCalled();
+  });
   it("retains browser startup failure and every selected dependent result", async () => {
     vi.spyOn(chromium, "launch").mockRejectedValueOnce(new Error("private startup detail"));
     const campaign = await run();
@@ -82,6 +132,7 @@ describe("product journey campaign boundary outcomes",()=>{
     const campaign=await run({finalizationFailure:true});
     expect(campaign.results.every((r:any)=>r.status==="failed"&&r.cleanup==="failed")).toBe(true);
     expect(campaign.results[0].productJourney.phases).toContainEqual({phase:"cleanup",outcome:"failed",code:"evidence_finalization_failed"});
+    expect(campaign.failureCheckpoint.results.every((r:any)=>r.cleanup==="failed")).toBe(true);
     expect(JSON.stringify(campaign)).not.toContain("private evidence upload diagnostic");
   });
   it("attempts evidence finalization even when dashboard generation fails",async()=>{
@@ -97,5 +148,36 @@ describe("product journey campaign boundary outcomes",()=>{
     expect(campaign.results[0]).toMatchObject({profileId:"runner-codex-mini",model:"gpt-5.4-mini"});
     expect(campaign.expected[0]).toBe("product-journeys.qa.runner-codex-mini.daytona.cloud-onboarding");
     expect(campaign.results[1]).toMatchObject({profileId:"browser",model:null,runtimeMode:"none"});
+  });
+  it.each(["write","rename"] as const)("still stops owned work and closes the browser when evidence %s fails",async kind=>{
+    const close=vi.fn(async()=>{});
+    vi.spyOn(chromium,"launch").mockResolvedValueOnce({newContext:async()=>({setDefaultTimeout(){},pages:()=>[]}),close} as any);
+    const errors=vi.spyOn(console,"error").mockImplementation(()=>{});
+    const listeners={interrupt:process.listenerCount("SIGINT"),terminate:process.listenerCount("SIGTERM")};
+    const campaign=await run({persistenceFailure:kind});
+    expect(campaign.lifecycle).toEqual(["release:failed"]); expect(close).toHaveBeenCalledOnce();
+    expect(process.listenerCount("SIGINT")).toBe(listeners.interrupt); expect(process.listenerCount("SIGTERM")).toBe(listeners.terminate);
+    expect(campaign.attemptedReport.results.every((r:any)=>r.status==="failed"&&r.cleanup==="failed")).toBe(true);
+    expect(campaign.attemptedReport.results[0].productJourney.phases).toContainEqual({phase:"cleanup",outcome:"failed",code:"evidence_persistence_failed"});
+    expect(JSON.stringify(campaign)).not.toContain("api_key_fixture"); expect(JSON.stringify(errors.mock.calls)).not.toContain("api_key_fixture");
+    expect(errors).toHaveBeenCalledWith("evidence_persistence_failed"); expect(process.exitCode).toBe(1);
+  });
+  it("withholds lease finalization when the report fails to persist after resource cleanup",async()=>{
+    const close=vi.fn(async()=>{});
+    vi.spyOn(chromium,"launch").mockResolvedValueOnce({newContext:async()=>({setDefaultTimeout(){},pages:()=>[]}),close} as any);
+    vi.spyOn(console,"error").mockImplementation(()=>{});
+    const campaign=await run({persistenceFailure:"rename",persistenceAfter:"release"});
+    expect(campaign.lifecycle).toEqual(["release:passed"]); expect(close).toHaveBeenCalledOnce();
+    expect(campaign.attemptedReport.results.every((r:any)=>r.cleanup==="failed")).toBe(true);
+    expect(process.exitCode).toBe(1);
+  });
+  it("preserves failed authentication and blocked dependents through evidence persistence failure",async()=>{
+    vi.spyOn(console,"error").mockImplementation(()=>{});
+    const campaign=await run({authFailure:true,persistenceFailure:"write"});
+    expect(campaign.lifecycle).toEqual(["release:failed"]);
+    expect(campaign.attemptedReport.results.map((r:any)=>r.productJourney.outcome)).toEqual(["failed","blocked"]);
+    expect(campaign.attemptedReport.results[0].error).toBe("login_code_expired");
+    expect(campaign.attemptedReport.results[1].error).toBe("prerequisite_journey_failed");
+    expect(JSON.stringify(campaign.attemptedReport)).not.toContain("api_key_fixture");
   });
 });

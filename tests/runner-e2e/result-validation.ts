@@ -25,6 +25,10 @@ const integer: Rule = (value, at) => {
 const boolean: Rule = (value, at) => {
   if (typeof value !== "boolean") invalid(at);
 };
+const booleanRecord: Rule = (value, at) => {
+  object(value, at);
+  for (const [key, entry] of Object.entries(value as object)) boolean(entry, `${at}.${key}`);
+};
 const object: Rule = (value, at) => {
   if (!value || typeof value !== "object" || Array.isArray(value)) invalid(at);
 };
@@ -298,7 +302,8 @@ const fields = {
     operations: optional(closedShape({ campaignId: string, attemptId: string, modelCostUsd: nullable(number), setupCostUsd: nullable(number), requestCount: integer,
       feedback: closedShape({ collection: oneOf("complete", "partial", "unavailable"), complaints: integer, suggestions: integer }), traceIds: array(string) })),
     outcome: oneOf("passed", "failed", "blocked", "unsupported"),
-    deployment: optional(shape({ kind: oneOf("self-hosted", "cloud"), targetId: string, origin: url, commit: string, cloudRelease: nullable(string), runtimeImage: nullable(string), configurationHash: string })),
+    deployment: optional(shape({ kind: oneOf("self-hosted", "cloud"), targetId: string, origin: url, commit: string, cloudRelease: nullable(string), runtimeImage: nullable(string), configurationHash: string,
+      effectiveFeatures: optional(booleanRecord), executionEnvironment: optional(closedShape({ id: string, driver: string, status: string })) })),
     startingState: oneOf("recipe", "onboarding"), privacy: oneOf("private"),
     phases: array(shape({ phase: oneOf("authentication", "setup", "journey", "collection", "cleanup"), outcome: oneOf("passed", "failed", "blocked", "unsupported"), code: optional(string) })),
     checks: array(shape({ id: string, passed: boolean })),
