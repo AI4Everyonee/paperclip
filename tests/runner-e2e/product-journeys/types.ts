@@ -66,6 +66,12 @@ export interface JourneyContext {
   identity: DeploymentIdentity;
   capabilities: string[];
   startingState: "recipe" | "onboarding";
+  fixtures?: { backlogTask?: PreparedBacklogTask };
+}
+export interface PreparedBacklogTask {
+  id: string;
+  title: string;
+  identifier: string;
 }
 export interface TargetLifecycleInput {
   signal: AbortSignal;

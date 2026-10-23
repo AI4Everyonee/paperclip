@@ -1,6 +1,6 @@
 import type { JourneyId, TargetConfig } from "./types.js";
 export const productJourneys = [
-  { id: "task-properties", label: "Assign a task to the signed-in user", requires: ["company", "board-user", "task-write"], capabilities: ["tasks/properties"], paid: false },
+  { id: "task-properties", label: "Assign a task to the signed-in user", requires: ["company", "board-user", "task-write", "backlog-task"], capabilities: ["tasks/properties"], paid: false },
   { id: "cloud-onboarding", label: "Create a Cloud workspace and complete a first task", requires: ["cloud-account", "fresh-workspace", "provider-key"], capabilities: ["onboarding/first-task"], paid: true },
 ] as const;
 

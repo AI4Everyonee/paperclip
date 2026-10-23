@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from "vitest";
 import { FixtureRegistry } from "../fixture-registry.js";
-import { parseTargetConfig, preparationPreview } from "./catalog.js";
+import { parseTargetConfig, preparationPreview, productJourneys } from "./catalog.js";
 import { journeyFixtures } from "./fixtures.js";
+import { taskProperties } from "./task-properties.js";
 import { validateRetainedRunnerResult } from "../result-validation.js";
 import { assertPublicCampaign } from "../history-publish.js";
 import { validateJourneyCollection } from "./collection.js";
@@ -9,8 +10,19 @@ import { summarizeExecutionBilling, aggregateCampaignBilling } from "../billing.
 import { discoverReportCatalog } from "../report-catalog.js";
 import { isIncompleteFirstTaskResult, renderCaseOutcome } from "../case-outcome.js";
 import type { RunnerE2EResult } from "../types.js";
-import type { JourneyContext, TargetSession } from "./types.js";
+import type { JourneyContext, JourneyEvidence, TargetSession } from "./types.js";
+vi.mock("@playwright/test", () => ({
+  expect: Object.assign(
+    (locator: { textContent(): Promise<string> }) => ({ async toContainText(value: string) { expect(await locator.textContent()).toContain(value); } }),
+    { poll: (read: () => Promise<unknown>) => ({ async toBe(value: unknown) { expect(await read()).toBe(value); } }) },
+  ),
+}));
 const local = { version: 1, id: "local-qa", mode: "managed-self-hosted", journeys: ["task-properties"], executionEnvironment: "local", baseline: { features: {}, connections: [] }, limits: { durationMs: 10000, modelBudgetCents: 0, maxRuns: 0 } };
+function preparedContext(startingState: JourneyContext["startingState"] = "recipe") {
+  const api = { origin: "https://qa.example.test", post: vi.fn(async () => ({ id: "task-1", identifier: "QA-1" })) };
+  const context = { capabilities: ["company", "board-user", "task-write"], company: { id: "company-1", issuePrefix: "QA" }, user: { id: "user-1", name: "QA" }, api, startingState } as unknown as JourneyContext;
+  return { context, api };
+}
 function result(): RunnerE2EResult {
   return { schema: "paperclip.runner-e2e.result/v2", suiteId: "product-journeys", suiteDefinitionHash: "test", executionId: "product-journeys.local-qa.local.task-properties", profileId: "local-qa", environmentId: "local", caseId: "task-properties", provider: null, model: null, runtimeMode: "none", status: "passed", cleanup: "passed", attempt: 1, startedAt: "2026-01-01T00:00:00Z", finishedAt: "2026-01-01T00:00:01Z", durationMs: 1000,
     productJourney: { outcome: "passed", startingState: "recipe", phases: [{phase: "journey", outcome: "passed"}], checks: [{id:"assignment-persisted", passed:true},{id:"no-agent-work",passed:true}], privacy: "private", resourceDisposition: "released", deployment: { kind: "self-hosted", targetId: "local-qa", origin: "http://127.0.0.1:3100", commit: "a".repeat(40), cloudRelease: null, runtimeImage: null, configurationHash: "test" } } };
@@ -35,9 +47,81 @@ describe("deployment journey contracts", () => {
     expect((await independent.resolve(["task-write"])).startingState).toBe("recipe");
     expect(prepare).toHaveBeenCalledTimes(1);
   });
+  it.each(["recipe", "onboarding"] as const)("prepares one owned backlog task from %s context before the journey", async startingState => {
+    const { context, api } = preparedContext(startingState);
+    const calls: string[] = [];
+    api.post.mockImplementation(async () => { calls.push("create"); return { id: "task-1", identifier: "QA-1" }; });
+    const prepare = vi.fn(async () => { calls.push("prepare"); return context; });
+    const own = vi.fn(async (resource: { id?: string }) => { calls.push(resource.id ? "receipt" : "intent"); });
+    const fixtures = journeyFixtures({ prepare, own } as unknown as TargetSession, "campaign-1");
+    if (startingState === "onboarding") fixtures.provide(context);
+    const required = productJourneys.find(journey => journey.id === "task-properties")!.requires;
+    for (const resolved of await Promise.all([fixtures.resolve(required), fixtures.resolve(required)])) expect(resolved).toBe(context);
+    expect(calls).toEqual([...(startingState === "recipe" ? ["prepare"] : []), "intent", "create", "receipt"]);
+    expect(api.post).toHaveBeenCalledExactlyOnceWith("/api/companies/company-1/issues", { title: "Journey QA campaign-1", description: "Disposable task-property verification", status: "backlog" });
+    expect(own.mock.calls).toEqual([[{ kind: "issue", name: "Journey QA campaign-1" }], [{ kind: "issue", name: "Journey QA campaign-1", id: "task-1" }]]);
+    expect(context.fixtures?.backlogTask).toEqual({ id: "task-1", identifier: "QA-1", title: "Journey QA campaign-1" });
+    expect(context.startingState).toBe(startingState);
+    expect(prepare).toHaveBeenCalledTimes(startingState === "recipe" ? 1 : 0);
+  });
+  it("requires a campaign ID only when a run-owned task is requested", async () => {
+    const { context, api } = preparedContext();
+    const prepare = vi.fn(async () => context);
+    const own = vi.fn();
+    const fixtures = journeyFixtures({ prepare, own } as unknown as TargetSession);
+    await expect(fixtures.resolve(["backlog-task"])).rejects.toMatchObject({ outcome: "blocked", code: "campaign_id_required_for_backlog_task" });
+    expect(prepare).not.toHaveBeenCalled();
+    expect(api.post).not.toHaveBeenCalled();
+    expect(own).not.toHaveBeenCalled();
+    expect(await fixtures.resolve(["company"])).toBe(context);
+  });
+  it.each(["intent", "receipt"])("does not redispatch task creation after an uncertain %s failure", async failure => {
+    const { context, api } = preparedContext();
+    const own = vi.fn(async (resource: { id?: string }) => { if (Boolean(resource.id) === (failure === "receipt")) throw Error("ownership write failed"); });
+    const fixtures = journeyFixtures({ prepare: async () => context, own } as unknown as TargetSession, "campaign-1");
+    await expect(fixtures.resolve(["backlog-task"])).rejects.toThrow("ownership write failed");
+    await expect(fixtures.resolve(["backlog-task"])).rejects.toThrow("ownership write failed");
+    expect(api.post).toHaveBeenCalledTimes(failure === "receipt" ? 1 : 0);
+    expect(own).toHaveBeenCalledTimes(failure === "receipt" ? 2 : 1);
+  });
+  it("uses the supplied task for UI assignment without creating another task", async () => {
+    const { context, api } = preparedContext();
+    const session = { prepare: async () => context, own: vi.fn(async () => {}) } as unknown as TargetSession;
+    const fixtures = journeyFixtures(session, "campaign-1");
+    await fixtures.resolve(["backlog-task"]);
+    api.post.mockImplementation(async () => { throw Error("task creation inside measured story"); });
+    let assigned = false;
+    const locator = { filter: vi.fn(), first: vi.fn(), locator: vi.fn(), getByRole: vi.fn(), click: vi.fn(), isVisible: vi.fn(async () => false), textContent: vi.fn(async () => assigned ? "You" : "Unassigned") };
+    for (const method of [locator.filter, locator.first, locator.locator, locator.getByRole]) method.mockReturnValue(locator);
+    const assign = { click: vi.fn(async () => { assigned = true; }) };
+    const page = { goto: vi.fn(), reload: vi.fn(), locator: vi.fn(() => locator), getByRole: vi.fn((_role: string, options?: { name?: unknown }) => options?.name === "Assign to me" ? assign : locator) };
+    const get = vi.fn(async (route: string) => route.endsWith("/runs") ? [] : { assigneeUserId: assigned ? context.user.id : null, assigneeAgentId: null, status: "backlog" });
+    Object.assign(context.api, { get });
+    context.page = page as unknown as JourneyContext["page"];
+    const evidence = { checks: [] } as unknown as JourneyEvidence;
+    await taskProperties(context, session, "campaign-1", evidence);
+    expect(api.post).toHaveBeenCalledTimes(1);
+    expect(session.own).toHaveBeenCalledTimes(2);
+    expect(page.goto).toHaveBeenCalledExactlyOnceWith("https://qa.example.test/QA/issues");
+    expect(locator.filter).toHaveBeenCalledWith({ hasText: "Journey QA campaign-1" });
+    expect(assign.click).toHaveBeenCalledOnce();
+    expect(page.reload).toHaveBeenCalledOnce();
+    expect(get.mock.calls.map(([route]) => route)).toEqual(["/api/issues/task-1", "/api/issues/task-1", "/api/issues/task-1/runs"]);
+    expect(evidence.checks).toEqual([{ id: "assignment-persisted", passed: true }, { id: "no-agent-work", passed: true }]);
+  });
+  it("blocks a story without the prepared task before using browser or API", async () => {
+    const { context, api } = preparedContext();
+    const own = vi.fn();
+    await expect(taskProperties(context, { own } as unknown as TargetSession, "campaign-1", { checks: [] } as unknown as JourneyEvidence)).rejects.toMatchObject({ outcome: "blocked", code: "missing_prepared_backlog_task" });
+    expect(api.post).not.toHaveBeenCalled();
+    expect(own).not.toHaveBeenCalled();
+  });
   it("rejects missing capabilities and cycles", async () => {
-    const fixtures = journeyFixtures({prepare:async()=>({capabilities:[]})} as unknown as TargetSession);
-    await expect(fixtures.resolve(["task-write"])).rejects.toMatchObject({outcome:"unsupported"});
+    const { context, api } = preparedContext();
+    context.capabilities = [];
+    const fixtures = journeyFixtures({ prepare: async () => context } as unknown as TargetSession, "campaign-1");
+    await expect(fixtures.resolve(["backlog-task"])).rejects.toMatchObject({outcome:"unsupported"});
+    expect(api.post).not.toHaveBeenCalled();
     const graph = new FixtureRegistry().register({id:"a",dependencies:["b"],setup:async()=>null}).register({id:"b",dependencies:["a"],setup:async()=>null});
     await expect(graph.setupAll(["a"])).rejects.toThrow("cycle");
   });
