@@ -102,15 +102,22 @@ export async function recoverRetainedWorkspace(input: Source & { db: Db; environ
     try {
       await observeActive();
       const inspected = await inspectWorkspaceRecoverySource(db, input);
+      let sourceUnavailable = false;
       for (const source of inspected.sources) {
         const { lease, environment, remoteCwd } = source;
+        if (hasRemoteTerminationReceipt(lease)
+          && (lease.metadata?.remoteExecutionTermination as Record<string, unknown> | undefined)?.state === "destroyed") {
+          sourceUnavailable = true;
+          continue;
+        }
         if (lease.provider === "daytona" && lease.providerLeaseId) {
           const absence = await requestSandboxAbsenceProof({ companyId: input.companyId, issueId: input.issueId, runId: input.runId, leaseId: lease.id,
             provider: "daytona", providerLeaseId: lease.providerLeaseId, ownerToken: ownership.token });
           if (absence) {
             await ownership.assertHeld();
             if (!await settleAbsentSandbox(db, lease, absence)) throw new SystemRecoveryFailure("agent_stop_unconfirmed", "recheck_evidence");
-            throw new SystemRecoveryFailure("source_unavailable", "use_alternative_strategy");
+            sourceUnavailable = true;
+            continue;
           }
         }
         let reference = source.reference;
@@ -231,6 +238,7 @@ export async function recoverRetainedWorkspace(input: Source & { db: Db; environ
         }
       }
       await ownership.assertHeld();
+      if (sourceUnavailable) throw new SystemRecoveryFailure("source_unavailable", "use_alternative_strategy");
       const next = { ...current!, revision: current!.revision + 1, phase: "reconcile_effects" as const,
         state: "complete" as const, nextAttemptAt: null };
       const activity = await db.transaction(async tx => {

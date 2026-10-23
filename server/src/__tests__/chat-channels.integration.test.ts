@@ -72368,7 +72368,8 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
           status: "running",
           contextSnapshot: {},
         });
-        const runsBefore = await readHeartbeatRunsByCompanyId(lane.fixture.companyId);
+        const runsBefore = (await readHeartbeatRunsByCompanyId(lane.fixture.companyId))
+          .toSorted((a, b) => a.id.localeCompare(b.id));
         let stoppedId = 0;
         lane.setHook(async (method, body) => {
           if (method.endsWith("Draft") && !stoppedId) {
@@ -72397,7 +72398,8 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
           .where(eq(issueComments.id, publication!.commentId!));
         expect(comment!.body).toContain("END-first-stopped");
         expect(
-          await readHeartbeatRunsByCompanyId(lane.fixture.companyId),
+          (await readHeartbeatRunsByCompanyId(lane.fixture.companyId))
+            .toSorted((a, b) => a.id.localeCompare(b.id)),
         ).toEqual(runsBefore);
         expect(lane.context.cancelRun).not.toHaveBeenCalled();
         expect(

@@ -580,12 +580,22 @@ describe("automatic retained workspace recovery", () => {
     expect(await readFile(path.join(f.host, "saved.txt"), "utf8")).toBe("finished work\n");
   }, 30_000);
 
-  it("continues an existing Retry after signed platform evidence that its retained allocation is absent", async () => {
+  it.each(["single", "multiple", "interrupted"])("continues an existing Retry after signed absence evidence for every retained allocation: %s", async mode => {
+    const count = mode === "single" ? 1 : 2;
     const f = await seed();
+    const leaseIds = [f.lease.id];
+    if (count === 2) {
+      const [additional] = await db.insert(environmentLeases).values({ ...f.lease, id: randomUUID(),
+        providerLeaseId: randomUUID(), status: "pending_cleanup", cleanupStatus: "failed", releasedAt: null }).returning();
+      leaseIds.push(additional.id);
+      const recovery = { schema: "paperclip.workspace-restore-recovery.v1", leaseIds };
+      await db.update(heartbeatRuns).set({ resultJson: sql`${heartbeatRuns.resultJson} || ${JSON.stringify({ workspaceRestoreRecovery: recovery })}::jsonb` })
+        .where(eq(heartbeatRuns.id, f.runId));
+      await db.update(issueRecoveryActions).set({ evidence: sql`${issueRecoveryActions.evidence} || ${JSON.stringify({ workspaceRestoreRecovery: recovery })}::jsonb` })
+        .where(eq(issueRecoveryActions.id, f.actionId));
+    }
     const source = await run(f.runId);
     await db.insert(heartbeatRuns).values({ companyId: f.companyId, agentId: source.agentId, status: "running" });
-    // An earlier reopen lost its reply and its stop receipt. A missing resource
-    // cannot answer another stop; only an independent platform read can settle it.
     const [stoppedLease] = await db.select().from(environmentLeases).where(eq(environmentLeases.id, f.lease.id));
     expect(await prepareStoppedSandboxForRecovery(db, stoppedLease)).not.toBeNull();
     f.runtime.resumeRunLease.mockRejectedValue(new Error("retained allocation unavailable"));
@@ -602,9 +612,14 @@ describe("automatic retained workspace recovery", () => {
       ...publicKey.export({ format: "jwk" }), kid: "absence-test", alg: "EdDSA", use: "sig",
     }] }));
     const originalFetch = globalThis.fetch;
+    const observed: string[] = [];
+    let interrupted = mode === "interrupted";
     const fetchProof = vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
       if (!String(url).endsWith("/v1/tenant/sandbox-absence")) return originalFetch(url, init);
       const binding = JSON.parse(String(init?.body));
+      observed.push(binding.leaseId);
+      if (mode === "interrupted" && binding.leaseId === f.lease.id && observed.length > 2) return new Response(null, { status: 503 });
+      if (interrupted && binding.leaseId !== f.lease.id) return new Response(null, { status: 503 });
       const seconds = Math.floor(Date.now() / 1000);
       const header = Buffer.from(JSON.stringify({ alg: "EdDSA", typ: "paperclip-sandbox-absence+jwt", kid: "absence-test" })).toString("base64url");
       const payload = Buffer.from(JSON.stringify({ v: 1, iss: "paperclip-cloud", aud: "paperclip-sandbox-absence/v1",
@@ -613,6 +628,17 @@ describe("automatic retained workspace recovery", () => {
     });
     try {
       await recoverRetainedWorkspace(f.input);
+      if (interrupted) {
+        expect(readSystemRecovery((await action(f.actionId)).evidence)?.state).not.toBe("exhausted");
+        interrupted = false;
+        await makeRetryDue(f.actionId);
+        await recoverRetainedWorkspace(f.input);
+      }
+      const leases = await db.select().from(environmentLeases).where(inArray(environmentLeases.id, leaseIds));
+      expect(leases).toHaveLength(count);
+      expect(observed).toEqual(mode === "interrupted" ? [leaseIds[0], leaseIds[1], leaseIds[1]] : leaseIds);
+      for (const lease of leases) expect(lease).toMatchObject({ status: "released", cleanupStatus: "success",
+        metadata: { remoteExecutionTermination: { state: "destroyed" } } });
       expect(readSystemRecovery((await action(f.actionId)).evidence)).toMatchObject({
         state: "exhausted", failure: { code: "source_unavailable", retryClass: "use_alternative_strategy" },
       });
