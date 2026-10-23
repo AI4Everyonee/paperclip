@@ -7,7 +7,8 @@ import { logger } from "../middleware/logger.js";
 import type { EnvironmentRuntimeService } from "./environment-runtime.js";
 import { resolveEnvironmentExecutionTarget } from "./environment-execution-target.js";
 import { hasRemoteTerminationReceipt } from "./remote-execution-termination.js";
-import { hasStopOnlyCleanup, prepareHistoricalSandboxStopVerification, prepareSandboxStopAndRetain, prepareStoppedSandboxForRecovery, settleStopOnlyCleanup } from "./sandbox-stop-and-retain.js";
+import { hasStopOnlyCleanup, prepareHistoricalSandboxStopVerification, prepareSandboxStopAndRetain, prepareStoppedSandboxForRecovery, settleAbsentSandbox, settleStopOnlyCleanup } from "./sandbox-stop-and-retain.js";
+import { requestSandboxAbsenceProof } from "./sandbox-absence-proof.js";
 import { persistActivity, publishActivity } from "./activity-log.js";
 import { hasRequiredWorkspaceRecovery } from "./workspace-restore-recovery-state.js";
 import { hasVerifiedWorkspaceRepair, readWorkspaceRecovery, type WorkspaceRecovery } from "./workspace-recovery-receipt.js";
@@ -103,6 +104,15 @@ export async function recoverRetainedWorkspace(input: Source & { db: Db; environ
       const inspected = await inspectWorkspaceRecoverySource(db, input);
       for (const source of inspected.sources) {
         const { lease, environment, remoteCwd } = source;
+        if (lease.provider === "daytona" && lease.providerLeaseId) {
+          const absence = await requestSandboxAbsenceProof({ companyId: input.companyId, issueId: input.issueId, runId: input.runId, leaseId: lease.id,
+            provider: "daytona", providerLeaseId: lease.providerLeaseId, ownerToken: ownership.token });
+          if (absence) {
+            await ownership.assertHeld();
+            if (!await settleAbsentSandbox(db, lease, absence)) throw new SystemRecoveryFailure("agent_stop_unconfirmed", "recheck_evidence");
+            throw new SystemRecoveryFailure("source_unavailable", "use_alternative_strategy");
+          }
+        }
         let reference = source.reference;
         if (reference) {
           try { await readNativeWorkspaceSyncLocalCwd({ runId: input.runId, companyId: input.companyId,

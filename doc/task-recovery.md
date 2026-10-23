@@ -47,6 +47,19 @@ Execution containment and file preservation are independent facts:
   `isolated-workspace-attempts` namespace. It does not modify the original
   directory or satisfy that source's preservation/cleanup obligation.
 
+A missing managed sandbox cannot answer another stop request. Core can request
+a signed absence observation from Cloud under a host-bound server capability.
+Cloud reads the exact allocation in the historical credential's organization.
+Only a fresh signature for the exact stack, company, issue, run, lease,
+allocation and physical recovery owner can settle execution absence. Permission
+failures, a changed organization, unsigned answers and provider timeouts remain
+inconclusive. This protocol requires Cloud support before the Core consumer.
+
+An absence receipt does not recover files or complete the task. The original run
+stays failed and its source remains protected. Existing authorized input may use
+normal fresh workspace admission only after every executor is contained. Known
+publications and uncertain external effects retain their normal receipt fences.
+
 Fresh attempts currently require Core-managed storage. Plugin-owned storage
 does not yet support importing these preserved snapshots. Preparation stops
 before calling that provider or acquiring an environment. It retains the
