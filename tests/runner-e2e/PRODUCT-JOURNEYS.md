@@ -23,7 +23,7 @@ never start a server or depend on a tenant filesystem.
 
 | Journey | Required starting state | Observed outcome |
 | --- | --- | --- |
-| `task-properties` | Company, signed-in board user, task-write capability | Create a unique backlog fixture, open its properties, assign it to the signed-in user, reload, check both UI and saved assignment; verify no agent run |
+| `task-properties` | Company, signed-in board user, task-write capability, prepared run-owned backlog task | Open its properties, assign it to the signed-in user, reload, check both UI and saved assignment; verify no agent run |
 | `cloud-onboarding` | Signed-in admitted Cloud account; fresh workspace; qualified bounded provider route | Create workspace in the portal, connect API key and native Codex agent in the wizard, complete a task, download and independently check its artifact |
 
 Supported acquisitions are managed self-hosted (`local`), registered existing
