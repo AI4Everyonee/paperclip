@@ -574,8 +574,12 @@ export async function finishGitCacheTrash(workspace: Workspace) {
 }
 
 /** Called only after authorization and while holding the source/lifecycle fences. */
+export function gitRestorePointExpired(recipe: GitCacheRestoration) {
+  return Boolean(recipe.restorePoint?.expiredAt) || (recipe.contents?.checkouts ?? []).some(checkout => Boolean(checkout.restorePoint?.expiredAt));
+}
+
 export async function restoreGitCacheBase(workspace: Workspace, recipe: GitCacheRestoration, resolveGitAuth: GitRemoteAuthProvider,
-  storage?: StorageService) {
+  storage?: StorageService, options: { freshStart?: boolean } = {}) {
   if (readGitCacheRestoration(workspace)?.commit !== recipe.commit) throw new GitCacheRestorationFailure();
   try {
     await finishGitCacheTrash(workspace);
@@ -600,6 +604,7 @@ export async function restoreGitCacheBase(workspace: Workspace, recipe: GitCache
         : (await materializeManagedProjectWorkspace(recipe.sourcePath, { repoUrl: recipe.repoUrl, resolveGitAuth })).cwd;
     await verifiedGitCacheSource(workspace, recipe.sourcePath);
     if (!cwd) throw new GitCacheRestorationFailure();
+    if (options.freshStart) return cwd;
     if (recipe.restorePoint) {
       await ensureGitRestorePointCommit({ storage: storage ?? getStorageService(), workspace: { companyId: workspace.companyId, id: workspace.id },
         ref: recipe.restorePoint, repositoryCwd: cwd });

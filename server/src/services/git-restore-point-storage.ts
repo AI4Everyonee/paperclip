@@ -264,9 +264,27 @@ export async function applyGitRestorePointToWorktree(input: {
 }
 
 export async function markGitRestorePointExpired(db: Db, restorePoint: { companyId: string; executionWorkspaceId: string; objectKey: string }) {
-  await db.update(executionWorkspaces).set({
-    metadata: sql`jsonb_set(${executionWorkspaces.metadata}, '{gitCacheRestoration,restorePoint,expiredAt}', ${JSON.stringify(new Date().toISOString())}::jsonb)`,
-    updatedAt: new Date(),
-  }).where(and(eq(executionWorkspaces.id, restorePoint.executionWorkspaceId), eq(executionWorkspaces.companyId, restorePoint.companyId),
-    sql`${executionWorkspaces.metadata}->'gitCacheRestoration'->'restorePoint'->>'objectKey' = ${restorePoint.objectKey}`));
+  const at = new Date().toISOString();
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const [row] = await db.select({ metadata: executionWorkspaces.metadata }).from(executionWorkspaces)
+      .where(and(eq(executionWorkspaces.id, restorePoint.executionWorkspaceId), eq(executionWorkspaces.companyId, restorePoint.companyId)));
+    const recipe = row?.metadata?.gitCacheRestoration as Record<string, any> | undefined;
+    if (!recipe) return;
+    const expire = (ref: Record<string, unknown> | undefined) => ref?.objectKey === restorePoint.objectKey ? { ...ref, expiredAt: at } : ref;
+    const next = {
+      ...recipe,
+      ...(recipe.restorePoint ? { restorePoint: expire(recipe.restorePoint) } : {}),
+      ...(recipe.contents ? { contents: { ...recipe.contents, checkouts: (recipe.contents.checkouts ?? []).map((checkout: Record<string, any>) =>
+        checkout.restorePoint ? { ...checkout, restorePoint: expire(checkout.restorePoint) } : checkout) } } : {}),
+    };
+    if (JSON.stringify(next) === JSON.stringify(recipe)) return;
+    const updated = await db.update(executionWorkspaces).set({
+      metadata: sql`jsonb_set(${executionWorkspaces.metadata}, '{gitCacheRestoration}', ${JSON.stringify(next)}::jsonb)`,
+      updatedAt: new Date(),
+    }).where(and(eq(executionWorkspaces.id, restorePoint.executionWorkspaceId), eq(executionWorkspaces.companyId, restorePoint.companyId),
+      sql`${executionWorkspaces.metadata}->'gitCacheRestoration' = ${JSON.stringify(recipe)}::jsonb`))
+      .returning({ id: executionWorkspaces.id });
+    if (updated.length === 1) return;
+  }
+  throw new RestorePointRestoreFailure("restore_point_expiry_conflict");
 }

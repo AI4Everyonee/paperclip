@@ -140,8 +140,15 @@ result. The bundle is always imported, so history-only commits are present again
 objects in the repository; they are not recreated as branches or reflog entries, and the
 restore point keeps them until it expires. A draft commit message left by an aborted
 commit still keeps the worktree from expiring, because restore points do not save it. A worktree that already matches is only marked applied, and a worktree that
-diverged is never overwritten: the restore fails closed and can be retried. A missing,
-corrupt or expired restore point also fails closed.
+diverged is never overwritten: the restore fails closed and can be retried. A missing
+or corrupt restore point also fails closed.
+
+When a restore point has expired, through retention or on a nested checkout, reopening
+starts fresh instead: the worktree is recreated on its branch (the branch tip if the
+repository still has it, otherwise a new branch from the base ref), the saved recipe is
+dropped, and a system comment on the issue warns that unpushed and uncommitted work from
+before the cleanup is no longer available. The same warning is returned with the reopen
+result and recorded on the `execution_workspace.reopened` activity.
 
 
 Restore points are encrypted saves of the parts of a git worktree that its remote

@@ -8,6 +8,8 @@ import { createRequire } from "node:module";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { eq, sql } from "drizzle-orm";
 import { companies, projects, projectWorkspaces, issues, executionWorkspaces, agents, heartbeatRuns, nativeRunFinalizations, workspaceRuntimeServices, executionWorkspaceRestorePoints, createDb } from "@paperclipai/db";
+import { markGitRestorePointExpired } from "../services/git-restore-point-storage.js";
+import { GIT_RESTORE_POINT_EXPIRED_WARNING } from "../services/execution-workspaces.js";
 import { getStorageService } from "../storage/index.js";
 import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } from "./helpers/embedded-postgres.js";
 import { resolveManagedProjectWorkspaceDir } from "../home-paths.js";
@@ -226,6 +228,21 @@ describeEmbeddedPostgres("reconstructable Git expiration", () => {
       expect(git(f.nested.cwd, "rev-parse", "HEAD")).toBe(unpushed);
       expect(await fs.readFile(path.join(f.nested.cwd, "draft.md"), "utf8")).toBe("nested untracked work\n");
       expect(await fs.readFile(f.nestedSettingsPath)).toEqual(f.settings);
+      vi.unstubAllEnvs();
+    });
+
+    it("reopens with a fresh workspace and a warning when a nested checkout's restore point expired", async () => {
+      vi.stubEnv("PAPERCLIP_SECRETS_MASTER_KEY", "31".repeat(32));
+      const f = await nestedFixture(false);
+      await unpushedNestedWork(f.nested.cwd);
+      expect(await f.expire({ expireBase: false, restorePoint: restorePoint() })).toMatchObject({ expired: true, restorePoint: true });
+      const [row] = await ledger(f.workspaceId);
+      await markGitRestorePointExpired(db, row!);
+      const recipe = (await f.row()).metadata?.gitCacheRestoration as Record<string, any>;
+      expect(recipe.contents.checkouts[0].restorePoint.expiredAt).toEqual(expect.any(String));
+      expect(await f.reopen()).toMatchObject({ ok: true, reopened: true, warning: GIT_RESTORE_POINT_EXPIRED_WARNING });
+      expect(await exists(f.cwd)).toBe(true);
+      expect((await f.row()).metadata?.gitCacheRestoration).toBeUndefined();
       vi.unstubAllEnvs();
     });
 

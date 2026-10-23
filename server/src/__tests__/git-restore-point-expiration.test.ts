@@ -6,13 +6,15 @@ import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { eq, sql } from "drizzle-orm";
-import { companies, createDb, executionWorkspaceRestorePoints, executionWorkspaces, issues } from "@paperclipai/db";
+import { companies, createDb, executionWorkspaceRestorePoints, executionWorkspaces, issueComments, issues } from "@paperclipai/db";
 import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } from "./helpers/embedded-postgres.js";
 import { materializeIsolatedRemoteWorkspaceSource } from "../services/isolated-remote-workspace-source.js";
 import { ensurePersistedExecutionWorkspaceAvailable, realizeExecutionWorkspace } from "../services/workspace-runtime.js";
 import { executionWorkspaceService } from "../services/execution-workspaces.js";
 import { expireReconstructableGitWorkspace } from "../services/git-workspace-expiration.js";
 import { getStorageService } from "../storage/index.js";
+import { markGitRestorePointExpired } from "../services/git-restore-point-storage.js";
+import { GIT_RESTORE_POINT_EXPIRED_WARNING } from "../services/execution-workspaces.js";
 
 const gitEnv = { ...process.env, GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "fixture@example.test",
   GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "fixture@example.test", GIT_TERMINAL_PROMPT: "0" };
@@ -224,6 +226,32 @@ describeEmbeddedPostgres("git restore point expiration", () => {
     expect(failed.metadata?.gitCacheRestoration).toMatchObject({ restorePoint: { objectKey: recipe.restorePoint.objectKey, appliedAt: null } });
     await expect(fs.access(path.join(f.cwd, "notes", "todo.md"))).rejects.toMatchObject({ code: "ENOENT" });
     expect(await f.reopen()).toMatchObject({ ok: false, code: "rebuild_failed" });
+  });
+
+  it("reopens a workspace whose restore point expired as a fresh workspace with a warning", async () => {
+    const f = await fixture();
+    const unpushed = await makeUnsavedWork(f.cwd);
+    expect(await f.expire()).toMatchObject({ expired: true });
+    const [ledgerRow] = await f.ledger();
+    await markGitRestorePointExpired(db, ledgerRow!);
+    await getStorageService().deleteObject(f.companyId, ledgerRow!.objectKey);
+    const branch = (await f.row()).branchName!;
+    git(f.baseCwd, "worktree", "prune");
+    git(f.baseCwd, "branch", "-D", branch);
+    git(f.baseCwd, "reflog", "expire", "--expire=now", "--all");
+    git(f.baseCwd, "gc", "-q", "--prune=now");
+    expect(() => git(f.baseCwd, "cat-file", "-e", `${unpushed}^{commit}`)).toThrow();
+    expect((await f.row()).metadata?.gitCacheRestoration).toMatchObject({ restorePoint: { expiredAt: expect.any(String) } });
+    const reopened = await f.reopen();
+    expect(reopened).toMatchObject({ ok: true, reopened: true, warning: GIT_RESTORE_POINT_EXPIRED_WARNING });
+    expect(await exists(f.cwd)).toBe(true);
+    expect(git(f.cwd, "rev-parse", "--abbrev-ref", "HEAD")).toBe(branch);
+    expect(git(f.cwd, "rev-parse", "HEAD")).not.toBe(unpushed);
+    expect(git(f.cwd, "status", "--porcelain")).toBe("");
+    await expect(fs.access(path.join(f.cwd, "notes", "todo.md"))).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await f.row()).metadata?.gitCacheRestoration).toBeUndefined();
+    const comments = await db.select().from(issueComments).where(eq(issueComments.issueId, f.issueId));
+    expect(comments.map(comment => [comment.authorType, comment.body])).toContainEqual(["system", GIT_RESTORE_POINT_EXPIRED_WARNING]);
   });
 
   it("reports a restore point candidate in dry run without storing anything", async () => {
